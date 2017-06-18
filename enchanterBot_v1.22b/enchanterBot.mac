@@ -1,0 +1,808 @@
+| ================================================================================
+|                  			EnchanterBot.Mac v1.22
+|                       Written By: Devestator
+| 
+| USAGE: /macro enchanterbot <iniName>
+| 
+| DESCRIPTION:
+|  Automates the role of an enchanter in the group, including the ability to mez.
+| 
+| v1.22 Update Notes
+|  -Corrected pet attack using [General] AssistPct instead of [PetSettings] PetAssistPct
+| 
+| v1.21 Update Notes
+|  -Corrected pet attack call to not require you to have a combat spell configured
+|    (even if that combat spell will never fire)
+| 
+| v1.20 Update Notes
+|  -Converted to common target routine
+|  -Added ability to combat npc pets
+| 
+| v1.19 Update Notes
+|  -Added Immune Announce settings to announce when a mob is immune to mez
+| 
+| v1.18 Update Notes
+|  -Updated Follow mode to detect combat better
+| 
+| v1.17 Update Notes
+|  -Improved pet handling code
+| 
+| v1.16 Update Notes
+|  -Made a small change to try and speed up mez usage when mobs stagger into camp
+| 
+| v1.15 Update Notes
+|  -Fixed a problem with resummoning pet if it dies
+| 
+| v1.14 Update Notes
+|  -Added support for Mesmerization Mastery AA to extend the duration of mez spells.
+|  
+| v1.13 Update Notes
+|  -Corrected a typo in charm routine
+| 
+| v1.12 Update Notes
+|  -Made a change to prevent enchanterBot from targetting corpses when trying to
+|    verify mezzes.
+|  -Corrected a possible mez routine loop that could prevent the bot from functioning
+|    and further after the current fight
+| 
+| v1.11 Update Notes
+|  -Added a setting to make it prefer to recharm an old charmed mob even after a
+|   failed charm.
+| 
+| v1.10 Update Notes
+|  -Added ability to charm mobs
+| 
+| v1.08 Update Notes
+|  -Added XTarget window functionality to mezing.
+| 
+| v1.07 Update Notes
+|  -Made it so that the enchanter would resummon it's pet after death if it was set
+|    to automatically summon (SummonPetAtStart=TRUE)
+|  -Added command Summon Pet to force the enchanter to summon it's Pet
+| 
+| v1.06 Update Notes
+|  -Fixed a bug that would cause the enchanter to ignore immunity on mezzes.
+| 
+| v1.05 Update Notes
+|  -Changed how the enchanter determins what target not to mez, when not using
+|    group assist
+| 
+| v1.04 Update Notes
+|  -Added code that will let the bot attempt to participate in combat if combat
+|   is encountered while in follow mode.
+|  -Updated for devCommon 1.84 with new add clean up routine.
+| 
+| v1.03 Update Notes
+|  -Some minor updates, added more logging events to help when troubleshooting
+|  -Corrected a typo in LoadSettings, preventing Mez minimum hps from working
+| 
+| v1.02 Update Notes
+|  -Added INI setting SingleMezMinHP, it will not attempt to mez any target that
+|   has less than this amount of hps.  Just set it to 0 if you want it to attempt
+|   to mez all targets regardless of HPs
+|  -Corrected a typo on the AEMez announce message, it should work now
+| 
+| v1.01 Update Notes
+|  -Corrected some code that could prevent a pet from attacking
+|  -Modified target check routines in the mez routine to try and prevent
+|   needing to switch targets as much.
+|  -Maded it so the bot will assist the main tank if no main assist is specified
+|   for casting spells and sending pet in
+| 
+| ================================================================================
+
+#include devCommonPremium.inc
+|#include enchanterBotSettings.ini
+
+#event MezBroke "#1#has been awakened by#2#"
+
+Sub main(string iniNameStr)
+	/declare meVersion									float outer 1.22
+	/declare myName											string outer enchanterbot
+	/declare myClass										string outer ENC
+	/declare currID											int local 0
+	/declare getTarget									bool local FALSE
+	/declare resumeFollow								bool local FALSE
+	
+	/mqlog clear
+	
+	/call CommonInit
+	/varset reqCommon	2.36
+	/varset reqMovement  1.60
+	/varset debugMode FALSE
+	
+	/if (${Defined[iniNameStr]}) {
+		/varset iniName enchanterbotsettings_${iniNameStr}.ini
+	} else {
+		/varset iniName enchanterbotsettings.ini
+	}
+	
+	/call EchoLog "Enchanterbot Initialized" TRUE
+	/call EchoLog "Loading variables..." TRUE
+	
+	/call LoadSettings
+	
+	/call EchoLog "Finished loading, starting EnchanterBot v${meVersion}" TRUE
+	
+	/if (${Me.Pet.ID} && ${charmEnabled}) /varset charmedID ${Me.Pet.ID}
+	
+	:mainLoop
+		/doevents
+		/call EnchanterCombatCheck
+		/call CheckForAggro
+		
+		/if (${Me.Moving}) /varset sitTimer 3s
+		/if (${allowSit} && !${Me.Sitting} && !${sitTimer} && !${Me.Mount.ID} && !${gotAggro} && !${followMode} && !${Me.Casting.ID} && ((${inCombat} && ${inCombatSit}) || (!${inCombat} && ${outOfCombatSit}))) /sit on
+
+		/if (${followMode} && ${inCombat}) {
+			/call SetHome
+			/varset followMode FALSE
+			/varset resumeFollow TRUE
+			/squelch /stick off
+			/call EchoLog "Combat started while following, breaking follow to participate in combat." TRUE
+		} else /if (${resumeFollow} && !${inCombat}) {
+			/squelch /target ID ${followTargID}
+			/delay 2s ${Target.ID}==${followTargID}
+			/if (${Target.ID}==${followTargID} && ${Target.Type.NotEqual[corpse]} && ${Target.Distance} < 200) {
+				/squelch /stick hold 10
+				/varset followMode TRUE
+			} else {
+				/call EchoLog "\ayCould not find follow target to resume following after combat.  Setting home location to current location"
+				/varset followTarg NULL
+				/varset followTargID 0
+				/call SetHome
+			}			
+			/varset resumeFollow FALSE
+		}
+
+		/if (!${inCombat} && !${followMode}) {
+			/if (${petSummonAtStart} && ${Me.PctMana} > ${summonPet} && (!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]})) /call SummonPet
+			/if (!${minBuffCheckTimer} && ${Me.PctMana} >= 50) /call buffCheck
+			/call CommonRoutines			
+		} else /if (${inCombat}) {
+			/if (${gotAggro} && ${aggroAACount}) {
+				/for nArray 1 to ${aggroAACount}
+					/if (${Me.AltAbilityReady[${aggroAAs[${nArray}]}]}) {
+						/call EchoLog "Attempting to use aggro aa: ${aggroAAs[${nArray}]}" TRUE
+						/call MQ2Cast "${aggroAAs[${nArray}]}" alt
+						/if (${CastResult.Equal[SUCCESS]}) {
+							/call EchoLog "Successfully used aggro aa: ${aggroAAs[${nArray}]}" TRUE
+							/goto :AAUsed
+						}
+					}
+				/next nArray
+				:AAUsed
+			}
+			
+			/if (${oldlTargCount}!=${lTargCount}) {
+				/varset mamtTargetTimer 0s
+				/varset oldlTargCount ${lTargCount}
+			}
+			
+			/call MezCheck
+			/call CharmCheck
+			/call CommonCombatRoutines
+
+			|**/if (${Group.MainAssist.ID} && ${Group.MainAssist.CleanName.Equal[${mainAssist}]}) {
+				/if (!${Target.ID} || !${Target.Assist}) {
+					/varset getTarget TRUE
+				} else {
+					/varset getTarget FALSE
+				} 
+			} else {
+				/varset getTarget TRUE
+			}
+			/if (${getTarget}) {
+				/varset currID ${Target.ID}
+				/varset getTarget FALSE
+				/if (${mainAssist.NotEqual[NULL]} && ${Spawn[${mainAssist}].ID} && ${Spawn[${mainAssist}].Distance} < ${campRadius}) {
+					/assist ${mainAssist}
+				} else /if (${mainTank.NotEqual[NULL]} && ${Spawn[${mainTank}].ID} && ${Spawn[${mainTank}].Distance} < ${campRadius}) {
+					/assist ${mainTank}
+				} else {
+					/varset getTarget TRUE
+				}
+				/delay 1s ${Target.ID}!=${currID}
+			}
+			
+			/if (${Target.ID} && !${getTarget}) {
+				/if (${Target.PctHPs} < ${assistPct}) {
+					/if (${Me.Pet.ID} && ${Me.Pet.Following.ID}!=${Target.ID} && !${Me.Pet.Name.Find[Familiar]}) /pet attack
+					/varset targID ${Target.ID}
+					/call CastSpell
+				}
+			}**|
+			
+			/call CommonGetTarget
+			
+			/if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[Pet]} && ${Target.Master.Type.NotEqual[PC]})) && ${Target.PctHPs} < ${assistPct} && ${Math.Distance[${homeY},${homeX}:${Target.Y},${Target.X}]} < ${campRadius}) {
+				/if (${Me.Pet.ID} && ${Me.Pet.Following.ID}!=${Target.ID} && !${Me.Pet.Name.Find[Familiar]} && ${Target.PctHPs} <= ${petAssistPct}) /pet attack
+				/if (${csCount}) /call CastSpell
+			}
+		}
+	/goto :mainLoop
+/return
+
+Sub AfterDeath
+	/if (${petSummonAtStart} && (!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]})) /varset summonPet 50
+	/varset charmedID 0
+/return
+
+Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
+	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/declare hMsg				string local COMPLETED_NOTFOUND
+	/declare rFromID		int local 0
+
+	/varset rFromID ${Spawn[pc ${rFrom}].ID}
+	
+	| ==========================
+	| Bot specific commands
+	| ==========================
+	/declare paramCount								int local
+	/varcalc paramCount ${rMsg.Count[ ]} + 1
+	/declare cParams[100]							string local
+	/declare strCommand								string local
+
+	/varset strCommand ${rMsg.Token[1, ]}
+	/if (${paramCount}) {
+		/for nArray 2 to ${paramCount}
+			/varset cParams[${Math.Calc[${nArray}-1]}] ${rMsg.Token[${nArray}, ]}
+		/next nArray
+	}
+	
+	/if (${strCommand.Equal[aemez]}) {
+		/if (${aeMezEnabled}) {
+			/varset aeMezEnabled FALSE
+		} else {
+			/varset aeMezEnabled TRUE
+		}
+		/varset hMsg AE Mezzing Enabled: \ag${aeMezEnabled}
+	} else /if (${strCommand.Equal[singlemez]}) {
+		/if (${singleMezEnabled}) {
+			/varset singleMezEnabled FALSE
+		} else {
+			/varset singleMezEnabled TRUE
+		}
+		/varset hMsg Single Target Mezzing Enabled: \ag${singleMezEnabled}
+	} else /if ((${strCommand.Equal[summon]} && ${cParams[1].Equal[pet]}) || ${strCommand.Equal[summonpet]}) {
+		/call SummonPet
+	} else /if (${strCommand.Equal[hushed]}) {
+		/declare cID				int local ${Target.ID}
+		/assist ${rFrom}
+		/delay 2s ${Target.ID}!=${cID}
+		/if (${Target.Type.NotEqual[NPC]}) {
+			/call Announce "Could not find target to cast the spell on."
+		} else {
+			/call MQ2Cast "Hushed Mind"
+			/if (${CastResult.NotEqual[CAST_SUCCESS]}) {
+				/call Announce "Failed to cast Hushed Mind, reason:  ${CastResult}"
+			} else {
+				/call Announce "Hushed Mind successfully cast"
+			}
+		}
+	} else /if (${strCommand.Equal[charm]}) {
+		/if (${charmEnabled}) {
+			/varset charmEnabled FALSE
+		} else {
+			/varset charmEnabled TRUE
+		}
+		/varset hMsg Charming has been set to: \ag${charmEnabled}
+	} else /if (${strCommand.Equal[breakcharm]}) {
+		/if (${charmedID} && ${Me.Pet.ID}) {
+			/if (${Me.AltAbilityReady[Perfected Invisibility]}) {
+				/call MQ2Cast "Perfected Invisibility" alt
+			} else {
+				/call MQ2Cast "Invisibility" ${charmSlot}
+			}
+			/if (${CastResult.Equal[CAST_SUCCESS]}) {
+				/varset hMsg Successfully invised, charm should be broken
+				/varset charmedID 0
+			} else {
+				/varset hMsg Failed to cast Invis to break charm.
+			}
+		}
+	}
+/return ${hMsg}
+
+Sub EnchanterCombatCheck
+	/call CheckForAdds ${campRadius} ${Me.ID} false
+	/if (${newAddID} && ${inCombat} && ${mezCheckTimer} > 10) {
+		/varset mezCheckTimer 15
+		/varset debuffCheckTimer 4s
+	}
+	| /if (${targCount}) /call AddCleanUp
+	/if (!${inCombat} && (${lTargCount} > 0 || ${Me.CombatState.Equal[Combat]})) {
+		/varset inCombat TRUE
+		/varset totalMezzed 0
+		/varset minBuffCheckTimer 10s
+		/varset debuffCheckTimer 5s
+		/varset mezCheckTimer 15
+		/if (${lTargCount} > 1 || ${targArray[1]}!=${charmedID}) /varset charmDelay 3s
+		/if (${Me.Pet.ID}) /varset engagePet TRUE
+	}
+	/if (${inCombat} && ${lTargCount} < 1 && ${Me.CombatState.NotEqual[Combat]}) {
+		/call MezList CLEAN
+		/varset inCombat false
+		/call AfterCombatRoutines
+		/varset targCount 0
+		/varset corpseCount 0
+		/varset lTargCount 0
+		/varset totalMezzed 0
+		/varset engagePet false
+		/if (${minBuffCheckTimer} < 150) /varset minBuffCheckTimer 15s
+	}		
+/return
+
+Sub Event_MezBroke(rLine,string rMob,string rBy)
+	/varset mamtTargetTimer 0s
+/return
+
+Sub TargCheck
+	/varset targCheckTimer 30s
+/return
+
+Sub MezCheck
+	/if (${mezCheckTimer}) /return
+	/if (${aeMez.Equal[NULL]} && ${singleMez.Equal[NULL]}) /return
+	/declare cAttempts				int local 0
+	/declare useAssist				bool local FALSE
+	/declare currID						int local 0
+	/declare needMaTarg				bool local TRUE
+	/declare needMtTarg				bool local TRUE
+	/declare aeMezFired				bool local FALSE
+	/declare aeMezChosen			bool local FALSE
+	/declare allowAEMez				bool local TRUE
+	/declare aeAdjust					int local 0
+	
+	
+	/call MezList UPDATE
+	
+	/call GetMATarget
+	/varset maTargID ${Macro.Return}
+	/if (${mainAssist.NotEqual[${mainTank}]}) {
+		/call GetMTTarget
+		/varset mtTargID ${Macro.Return}
+	} else {
+		/varset mtTargID ${maTargID}
+	}
+	/if (${maTargID} && ${Spawn[ID ${maTargID}].Type.Equal[NPC]}) /varset aeAdjust 1
+	/if (${mtTargID} && ${mtTargID}!=${maTargID} && ${Spawn[ID ${mtTargID}].Type.Equal[NPC]}) /varcalc aeAdjust ${aeAdjust} + 1
+	:reMez
+	/varset aeMezChosen FALSE
+	/for nArray 1 to ${targCount}
+		/if (${Spawn[${targArray[${nArray}]}].ID} && ${Spawn[${targArray[${nArray}]}].Type.Equal[NPC]}) {
+			| /if ((!${Spawn[${targArray[${nArray}]}].Assist} && ${useAssist}) || (!${useAssist} && ${targArray[${nArray}]}!=${maTargID} && ${targArray[${nArray}]}!=${mtTargID})) {
+			/if (${targArray[${nArray}]} != ${maTargID} && ${targArray[${nArray}]} != ${mtTargID}) {
+				/call MezList CHECK 0
+				/if (${Math.Calc[${lTargCount} - ${totalMezzed} - ${aeAdjust}]} >= ${aeMezMinMobs} && ${aeMez.NotEqual[NULL]} && ${Macro.Return.Equal[FALSE]} && ${aeMezEnabled} && ${allowAEMez}) {
+					/varset aeMezChosen TRUE
+					/if (${Spawn[${targArray[${nArray}]}].Distance} > ${Spell[${aeMez}].AERange} || !${aeRangeCheck}) {
+						/squelch /target ID ${targArray[${nArray}]}
+						/delay 1s ${Target.ID}==${targArray[${nArray}]}
+						/call Announce "${aeMezAnnounce}"
+						/call EchoLog "Attempting to cast AE Mez: ${aeMez} Total Targets: ${targCount}, Living Targets: ${lTargCount}, Mezzed: ${totalMezzed}" TRUE
+						/varset cAttempts 0
+						:aeAttempt
+						/varcalc cAttempts ${cAttempts} + 1
+						/call MQ2Cast "${aeMez}" ${aeMezSlot}
+						/if (${CastResult.Equal[CAST_SUCCESS]} || ${CastResult.Equal[CAST_RESIST]} || ${CastResult.Equal[CAST_IMMUNE]}) {
+							/varset aeMezFired TRUE
+							/call EchoLog "Successfully casted ae mez: ${aeMez} | ${CastResult}" TRUE
+							/varset aeMezTimer ${Math.Calc[${Spell[${aeMez}].Duration.TotalSeconds}+${mezMasteryMod}]}s
+							/varset debuffCheckTimer 5s
+							/squelch /target clear
+							/delay 1s !${Target.ID}
+							/return
+						} else /if (${CastResult.Equal[CAST_FIZZLE]} && ${cAttempts} < 3) {
+							/goto :aeAttempt
+						} else {
+							/if (${CastResult.Equal[CAST_IMMUNE]}) /call Announce "${aeImmuneAnnounce}"
+							/call EchoLog "Casting of ae mez: ${aeMez} failed Reason: ${CastResult}" TRUE
+						}
+					}
+				} else /if (${singleMezEnabled}) {
+					/call MezList CHECK ${targArray[${nArray}]}
+					/if (${Macro.Return.Equal[FALSE]}) {	
+						/squelch /target ID ${targArray[${nArray}]}
+						/delay 1s ${Target.ID}==${targArray[${nArray}]}
+						/if (${Target.PctHPs} >= ${singleMezMinHP}) {
+							/call Announce "${singleMezAAnnounce}"
+							/call EchoLog "Attempting to cast Mez: ${singleMez} on ${Target.CleanName} | ${Target.ID} Total Targets: ${targCount}, Living Targets: ${lTargCount}, Mezzed: ${totalMezzed}" TRUE
+							/varset cAttempts 0
+							:singleAttempt
+							/varcalc cAttempts ${cAttempts} + 1
+							/call MQ2Cast "${singleMez}" ${singleMezSlot}
+							/if (${CastResult.Equal[CAST_SUCCESS]}) {
+								/call EchoLog "Successfully casted single mez: ${singleMez}" TRUE
+								/call Announce "${singleMezSAnnounce}"
+								/call MezList ADD ${Target.ID} ${Math.Calc[${Spell[${singleMez}].Duration.TotalSeconds}+${mezMateryMod}]}s
+								/squelch /target clear
+								/delay 1s !${Target.ID}
+							} else /if (${CastResult.Equal[CAST_IMMUNE]}) {
+								/call EchoLog "${Target.CleanName} | ${Target.ID} is immune to mez, not attempting to mez it anymore." TRUE
+								/call Announce "${singleImmuneAnnounce}"
+								/call MezList ADD ${Target.ID} 30m
+								/squelch /target clear
+								/delay 1s !${Target.ID}
+							} else /if (${CastResult.Equal[CAST_FIZZLE]} && ${cAttempts} < 3) {
+								/goto :singleAttempt							
+							} else {
+								/call EchoLog "Casting of single mez: ${singleMez} failed Reason: ${CastResult}" TRUE
+							}
+						}
+					}
+				}
+			}
+		}
+	/next nArray
+	/if (!${aeMezFired} && ${aeMezChosen}) {
+		/varset allowAEMez FALSE
+		/goto :reMez
+	}
+/return
+
+Sub MezTimerCheck(int mezTargID)
+	/if (${mezTargID}) {
+		/if (!${Defined[singleMezTimer${mezTargID}]} || !${singleMezTimer${mezTargID}}) {
+			/return FALSE
+		} else {
+			/if (${singleMezTimer${mezTargID}}<${Math.Calc[${Spell[${singleMez}].MyCastTime.TotalSeconds} * 2]}) {
+				/return FALSE
+			} else {
+				/return TRUE
+			}
+		}
+	} else {
+		/if (!${aeMezTimer}) {
+			/return FALSE
+		} else {
+			/if (${aeMezTimer} < ${Math.Calc[${Spell[${aeMez}].MyCastTime.TotalSeconds} * 2]}) {
+				/return FALSE
+			} else {
+				/return TRUE
+			}
+		}		
+	}
+/return FALSE
+
+Sub MezList(string Action, int AddID, string setTimer) 
+	/if (!${Defined[Action]}) /declare Action				string local UPDATE
+	/if (!${Defined[setTimer]}) /declare setTimer		string local ${Math.Calc[${Spell[${singleMez}].Duration.TotalSeconds}+${mezMasteryMod}]}s
+	/declare mlArray							int local 0
+	/declare hReturn							string local FALSE
+	
+	/if (${Action.Equal[UPDATE]}) {
+		/for mlArray 1 to ${targCount}
+			/if (${Spawn[${targArray[${mlArray}]}].Type.Equal[NPC]}) {
+				/call MezTimerCheck ${targArray[${mlArray}]}
+				/varset isMezzed[${mlArray}] ${Macro.Return}	
+			} else {
+				/varset isMezzed[${mlArray}] FALSE
+			}
+		/next mlArray
+	} else /if (${Action.Equal[CLEAN]}) {
+		/for mlArray 1 to 100
+			/varset isMezzed[${mlArray}] FALSE
+		/next mlArray
+		/varset totalMezzed 0
+	} else /if (${Action.Equal[CHECK]}) {
+		/if (${Defined[AddID]}) {
+			/if (${AddID}) {
+				/for mlArray 1 to ${targCount}
+					/if (${targArray[${mlArray}]}==${AddID}) {
+						/call MezVerify ${AddID}
+						/varset isMezzed[${mlArray}] ${Macro.Return}
+						/varset hReturn ${isMezzed[${mlArray}]}
+						/goto :mChecked
+					}
+				/next mlArray
+			} else {
+				/call MezTimerCheck 0
+				/varset hReturn ${Macro.Return}
+			}
+		} else {
+			/varset hReturn TRUE
+			/for mlArray 1 to ${targCount}
+				/call MezTimerCheck ${targArray[${mlArray}]}
+				/if (${Macro.Return.Equal[FALSE]}) {
+					/varset hReturn FALSE
+					/goto :mChecked
+				}
+			/next mlArray
+		}
+		:mChecked
+	} else /if (${Action.Equal[ADD]}) {
+		/if (${Defined[AddID]}) {
+			/for mlArray 1 to ${targCount}
+				/if (${targArray[${mlArray}]}==${AddID}) {
+					/varset isMezzed[${mlArray}] TRUE
+					/call MobMoved ${AddID} TRUE
+					/if (!${Defined[singleMezTimer${Target.ID}]}) /declare singleMezTimer${Target.ID} timer outer 0s
+					/varset singleMezTimer${Target.ID} ${setTimer}
+					/goto :mAdded
+				}
+			/next mlArray
+			:mAdded
+		}
+	}
+	
+	/if (${Action.NotEqual[CLEAN]}) {
+		/varset totalMezzed 0
+		/for mlArray 1 to ${targCount}
+			/if (${isMezzed[${mlArray}]}) /varcalc totalMezzed ${totalMezzed} + 1
+		/next mlArray
+	}
+/return ${hReturn}
+
+Sub MezVerify(int vID)
+	/if (!${Defined[vID]}) /return TRUE
+	/declare retValue					bool local TRUE
+	
+	/call timer attempts ${vID}
+	/if (${Macro.Return.Equal[FALSE]}) {
+		/call MezTimerCheck ${vID}
+		/if (${Macro.Return.Equal[FALSE]}) {
+			/varset retValue FALSE
+		} else /if (${singleMezTimer${vID}}>3000) {
+			/varset retValue TRUE		
+		} else /if (${Spawn[${vID}].Moving}) {
+			/call EchoLog "${Spawn[${vID}].CleanName} | ${vID} does not seem to be mezzed because it's moving" TRUE
+			/varset retValue FALSE
+		| } else 	/if (!${Select[${Spawn[${vID}].Animation}, 26, 32, 71, 72, 110, 111]}) {
+		| 	/call EchoLog "${Spawn[${vID}].CleanName} | ${vID} does not seem to be mezzed based on it's animation" TRUE
+		| 	/varset retValue FALSE
+		} else {		
+			/call MobMoved ${vID}
+			/if (${Macro.Return.Equal[TRUE]}) {
+				/call EchoLog "${Spawn[${vID}].CleanName} | ${vID} does not seem to be mezzed because it's moving" TRUE
+				/varset retValue FALSE			
+			} else /if (${Spawn[${vID}].Type.Equal[NPC]}) {
+				/call timer inspect ${vID}
+				/if (${Me.LAInspectBuffs} && ${Macro.Return.Equal[FALSE]}) {
+					/squelch /target ID ${vID}
+					/delay 1s ${Target.ID}==${vID}
+					/delay 2s ${Target.BuffCount}
+					/call timer inspect ${vID} 30s
+					/if (${Target.Buff[${singleMez}].ID} && ${Target.Buff[${singleMez}].Duration.TotalSeconds} > 15) {
+						/varset retValue TRUE
+					} else {
+						/call EchoLog "${Spawn[${vID}].CleanName} | ${vID} does not seem to be mezzed based on it's buff list using leadership ability inspect buffs" TRUE
+						/varset retValue FALSE
+					}
+				}
+			}
+		}
+		
+		/if (!${retValue}) {
+			/if (!${Defined[mezAttempts${vID}]}) /declare mezAttempts${vID} int outer 0
+			/varcalc mezAttempts${vID} ${mezAttempts${vID}} + 1
+			/if (${mezAttempts${vID}} > ${singleMezMaxAttempts}) /call timer attempts ${vID} 1m
+		}
+	} else {
+		/varset retValue TRUE
+	}
+/return ${retValue}
+
+Sub MobMoved(int vID, bool UpdateLoc) 
+	/if (!${Spawn[${vID}].ID} || ${Spawn[${vID}].Type.NotEqual[NPC]}) /return FALSE
+	/if (!${Defined[UpdateLoc]}) /declare UpdateLoc bool local FALSE
+	/declare retValue				bool local FALSE
+	
+	/if (${Defined[mobX${vID}]}) {
+		/if (${Math.Distance[${Spawn[${vID}].Y},${Spawn[${vID}].X},${Spawn[${vID}].Z}:${mobY${vID}},${mobX${vID}},${mobZ${vID}}]} > 0 || ${Math.Calc[${Spawn[${vID}].Heading.Degrees} - ${mobDir${vID}}]} > 0) /varset retValue TRUE
+	} else {
+		/varset UpdateLoc TRUE
+	}
+	
+	/if (${UpdateLoc}) {
+		/if (!${Defined[mobX${vID}]}) /declare mobX${vID} float outer ${Spawn[${vID}].X}
+		/if (!${Defined[mobY${vID}]}) /declare mobY${vID} float outer ${Spawn[${vID}].Y}
+		/if (!${Defined[mobZ${vID}]}) /declare mobZ${vID} float outer ${Spawn[${vID}].Z}
+		/if (!${Defined[mobDir${vID}]}) /declare mobDir${vID} float outer ${Spawn[${vID}].Heading.Degrees}
+
+		/varset mobX${vID} ${Spawn[${vID}].X}
+		/varset mobY${vID} ${Spawn[${vID}].Y}
+		/varset mobZ${vID} ${Spawn[${vID}].Z}
+		/varset mobDir${vID} ${Spawn[${vID}].Heading.Degrees}
+		/varset retValue FALSE
+	}
+/return ${retValue}
+
+Sub LoadSettings
+	| ===============================
+	| pet settings
+	| ===============================
+	/declare petSpellName										string outer
+	/declare petSpellSlot										string outer
+	/declare petSummonAtStart								bool outer false
+	/declare petAssistPct										int outer 97
+	/declare petTargetID										int outer 0
+	
+	/call GetINISetting ${iniName} PetSettings PetSpellName petSpellName NULL
+	/call GetINISetting ${iniName} PetSettings PetSpellSlot petSpellSlot gem1
+	/call GetINISetting ${iniName} PetSettings SummonAtStart petSummonAtStart ${If[${petSpellName.NotEqual[NULL]},TRUE,FALSE]}
+	/call GetINISetting ${iniName} PetSettings PetAssistPct petAssistPct 97
+	/call EchoLog "Pet Settings - Pet Spell: ${petSpellName} Slot: ${petSpellSlot} SummonAtStart: ${petSummonAtStart} Assist Pct: ${petAssistPct}" TRUE
+	
+	| ===============================
+	| Aggro aa settings
+	| ===============================
+	/declare aggroAAs[20]										string outer
+	/declare aggroAACount										int outer
+	/call GetINIArrayCount ${iniName} AggroAAs AggroAA NULL
+	/varset aggroAACount ${Macro.Return}
+	/call EchoLog "Loading ${aggroAACount} Aggro management AAs" TRUE
+	/if (${aggroAACount}) {
+		/for nArray 1 to ${aggroAACount}
+			/call GetINISetting ${iniName} AggroAAs AggroAA${nArray} aggroAAs[${nArray}] NULL
+			/call EchoLog ".....${nArray} - ${aggroAAs[${nArray}]}" TRUE
+		/next nArray
+	}
+	/call GetINISetting ${iniName} AggroAAs AggroAA${Math.Calc[${aggroAACount}+1].Int} NULL NULL
+	
+	| ===============================
+	| Mez settings
+	| ===============================
+	/call EchoLog "Loading Mez Settings..."
+	/declare singleMez											string outer
+	/declare singleMezSlot									string outer
+	/declare aeMez													string outer
+	/declare aeMezSlot											string outer
+	/declare aeMezMinMobs										int outer 100
+	/declare aeMezTimer											timer outer 0s
+	/declare aeMezAnnounce									string outer
+	/declare aeImmuneAnnounce							string outer
+	/declare singleMezAAnnounce							string outer
+	/declare singleMezSAnnounce							string outer
+	/declare singleImmuneAnnounce							string outer
+	/declare aeMezEnabled										bool outer TRUE
+	/declare singleMezEnabled								bool outer TRUE
+	/declare mezCheckTimer									timer outer 0s
+	/declare singleMezMaxAttempts						int outer 1
+	/declare mamtTargetTimer								timer outer 0s
+	/declare singleMezMinHP									int outer 0
+	/declare aeRangeCheck										bool outer TRUE
+	
+	/call GetINISetting ${iniName} MezSettings SingleMezSpell singleMez NULL
+	/call GetINISetting ${iniName} MezSettings SingleMezSlot singleMezSlot gem1
+	/call GetINISetting ${iniName} MezSettings SingleMezAttemptAnnounce singleMezAAnnounce NULL
+	/call GetINISetting ${iniName} MezSettings SingleMezSuccessAnnounce singleMezSAnnounce NULL
+	/call GetINISetting ${iniName} MezSettings SingleMezMaxAttempts singleMezMaxAttempts 3
+	/call GetINISetting ${iniName} MezSettings SingleImmuneAnnounce singleImmuneAnnounce NULL
+	/call GetINISetting ${iniName} MezSettings AEMezSpell aeMez NULL
+	/call GetINISetting ${iniName} MezSettings AEMezSlot aeMezSlot gem2
+	/call GetINISetting ${iniName} MezSettings AEMezMinMobs aeMezMinMobs 3
+	/call GetINISetting ${iniName} MezSettings AEMezAnnounce aeMezAnnounce NULL
+	/call GetINISetting ${iniName} MezSettings AEImmuneAnnounce aeImmuneAnnounce NULL
+	/call GetINISetting ${iniName} MezSettings SingleMezMinHP singleMezMinHP 0
+	/call GetINISetting ${iniName} MezSettings AERangeCheck aeRangeCheck TRUE
+	/call EchoLog "Single Mez: ${singleMez} Slot: ${singleMezSlot} Max Attempts: ${singleMezMaxAttempts} Min HP: ${singleMezMinHP}" TRUE
+	/call EchoLog "AE Mez: ${aeMez} Slot: ${aeMezSlot} Min Mobs: ${aeMezMinMobs}" TRUE
+	
+	| ===============================
+	| Charm settings
+	| ===============================
+	/call EchoLog "Loading Charm Settings..."
+	/declare charmSpell											string outer
+	/declare charmSlot											string outer
+	/declare charmMinLevel									int outer 1
+	/declare charmMaxLevel									int outer 90
+	/declare charmPreStun										bool outer TRUE
+	/declare charmStunSpell									string outer
+	/declare charmStunSlot									string outer
+	/declare charmPreTash										bool outer TRUE
+	/declare charmTashSpell									string outer
+	/declare charmTashSlot									string outer
+	/declare charmEnabled										bool outer TRUE
+	/declare charmMinMobs										int outer 2
+	/declare charmedID											int outer 0
+	/declare oldCharmedID										int outer 0
+	/declare charmDelay											timer outer 0s
+	
+	/call GetINISetting ${iniName} CharmSettings CharmEnabled charmEnabled FALSE
+	/call GetINISetting ${iniName} CharmSettings CharmSpell charmSpell NULL
+	/call GetINISetting ${iniName} CharmSettings CharmSlot charmSlot gem1
+	/call GetINISetting ${iniName} CharmSettings CharmMinLevel charmMinLevel 1
+	/call GetINISetting ${iniName} CharmSettings CharmMaxLevel charmMaxLevel 90
+	/call GetINISetting ${iniName} CharmSettings CharmPreStun charmPreStun TRUE
+	/call GetINISetting ${iniName} CharmSettings CharmPreTash charmPreTash TRUE
+	/call GetINISetting ${iniName} CharmSettings CharmStunSpell charmStunSpell NULL
+	/call GetINISetting ${iniName} CharmSettings CharmStunSlot charmStunSlot gem2
+	/call GetINISetting ${iniName} CharmSettings CharmTashSpell charmTashSpell NULL
+	/call GetINISetting ${iniName} CharmSettings CharmTashSlot charmTashSlot gem2
+	/call GetINISetting ${iniName} CharmSettings CharmMinMobs charmMinMobs 2s
+	
+	/call EchoLog "Charm: ${charmSpell} Min: ${charmMinLevel} Max: ${charmMaxLevel} Min Mobs: ${charmMinMobs} Stun: ${charmPreStun} - ${charmStunSpell} Tash: ${charmPreTash} ${charmTashSpell}" TRUE
+	
+	| ===============================
+	| Final vars setup
+	| ===============================
+|	/declare engagePet											bool outer false
+	/declare maTargID												int outer 0
+	/declare mtTargID												int outer 0
+	/declare targCheckTimer									timer outer 0s
+	/declare totalMezzed										int outer 0
+	/declare isMezzed[100]									bool outer
+	/declare oldlTargCount									int outer 0
+	/declare summonPet											int outer 0
+	/declare mezMasteryMod									float outer 0
+	
+	/if (${Me.AltAbility[Mesmerization Mastery]} >= 12) /varcalc mezMasteryMod ${mezMasteryMod} + 6
+	/if (${Me.AltAbility[Mesmerization Mastery]} >= 20) /varcalc mezMasteryMod ${mezMasteryMod} + 6
+	/if (${Me.AltAbility[Mesmerization Mastery]} >= 28) /varcalc mezMasteryMod ${mezMasteryMod} + 6
+	/if (${Me.AltAbility[Mesmerization Mastery]} >= 40) /varcalc mezMasteryMod ${mezMasteryMod} + 6
+	
+	/call CommonLoad
+	/varset targCount 0
+
+	/call EchoLog "EnchanterBot \agv${meVersion}\ao, written by \awDevestator\ao, initiated"
+	/call EchoLog "Looting Corpses: \ag${lootCorpses}"
+	/call EchoLog "Main Tank: \ag${mainTank}"
+	/call EchoLog "Main Assist: \ag${mainAssist}"
+	/call EchoLog "Puller: \ag${pullerName}"
+	/call EchoLog "INI FileName: \ag${iniName}"
+	/call EchoLog "Debuffing: \ag${doDebuffs}"
+	/if (${doAnnounce}) {
+		/call EchoLog "Announcements: \ag${announceChan}"
+	} else {
+		/call EchoLog "Announcements: \agOFF"
+	}
+		
+	/if (${petSummonAtStart} && (!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]})) /call SummonPet
+/return
+
+Sub SummonPet
+	/if (${Me.Pet.ID} && ${Me.Pet.Name.Find[familiar]}) /pet get lost
+	/delay 1s !${Me.Pet.ID}
+	/if (!${Me.Pet.ID}) /call MQ2Cast "${petSpellName}" ${petSpellSlot}
+	/delay 5
+	/if (!${Me.Pet.ID}) {
+		/call EchoLog "\ayFailed to summon pet, casting result: ${CastResult}"
+	} else {
+		/varset summonPet 0
+	}
+/return
+
+Sub CharmCheck
+	/if (${charmDelay}) /return
+	/if (${charmedID} && !${Spawn[ID ${charmedID}].ID}) /varset charmedID 0
+	/if (${oldCharmedID} && !${Spawn[ID ${oldCharmedID}].ID}) /varset oldCharmedID 0
+	
+	/if (${charmEnabled} && !${Me.Pet.ID} && ${charmSpell.NotEqual[NULL]}) {
+		/if (${charmedID} && ${Spawn[${charmedID}].ID} && ${Spawn[${charmedID}].Type.Equal[NPC]} && ${Spawn[${charmedID}].Distance} < ${Math.Calc[${Spell[${charmSpell}].Range} - 25]}) {
+			/squelch /target ID ${charmedID}
+			/delay 1s ${Target.ID}==${charmedID}
+		} else /if (${oldCharmedID} && ${Spawn[${oldCharmedID}].ID} && ${Spawn[${oldCharmedID}].Type.Equal[NPC]} && ${Spawn[${oldCharmedID}].Distance} < ${Math.Calc[${Spell[${charmSpell}].Range} - 25]}) {
+			/squelch /target ID ${oldCharmedID}
+			/delay 1s ${Target.ID}==${oldCharmedID}
+		} else {
+			/if (${lTargCount} >= ${charmMinMobs}) {
+				/if (!${maTargetID} || !${Spawn[ID ${maTargetID}].ID}) /call GetMATarget
+				/for nArray 1 to ${targCount}
+					/if (${Spawn[${targArray[${nArray}]}].ID} && ${targArray[${nArray}]}!=${maTargetID} && ${Spawn[${targArray[${nArray}]}].Distance} < ${campRadius} && ${Spawn[${targArray[${nArray}]}].Level} >= ${charmMinLevel} && ${Spawn[${targArray[${nArray}]}].Level} <= ${charmMaxLevel}) {
+						/squelch /target ID ${targArray[${nArray}]}
+						/varset charmedID ${targArray[${nArray}]}
+					} else {
+						/next nArray
+					}
+				/delay 1s ${Target.ID}==${charmedID}
+			}
+		}
+		/if (${Target.ID}==${charmedID} && ${Target.Type.Equal[NPC]}) {
+			/if (${charmPreStun} && ${charmStunSpell.NotEqual[NULL]}) {
+				/call MQ2Cast "${charmStunSpell}" ${charmStunSlot} -maxtries|2
+			}
+			/if (${charmPreTash} && ${charmTashSpell.NotEqual[NULL]}) {
+				/call MQ2Cast "${charmTashSpell}" ${charmTashSlot} -maxtries|2
+			}
+			/call MQ2Cast "${charmSpell}" ${charmSlot} -maxtries|2
+			/if (${CastResult.Equal[CAST_SUCCESS]}) {
+				/call EchoLog "Successfully charmed ${Me.Pet.CleanName} | ${Me.Pet.ID}" TRUE
+			} else {
+				/call EchoLog "Failed to charm ${Spawn[${charmedID}].CleanName} | ${charmedID}" TRUE
+				/varset oldCharmedID ${charmedID}
+				/varset charmedID 0
+			}
+		}
+	}
+/return

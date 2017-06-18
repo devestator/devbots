@@ -1,0 +1,785 @@
+| =================================================================================================
+| 									   MonkBot v1.23
+| 									Written By: Devestator
+| 													
+| 													
+| USAGE: /macro monkBot <IniName>
+| 													
+| 													
+| Description:												
+|  This is a bot meant to automate the role of a monk in a group.							
+| 													
+| 													
+| Requirements:												
+|  MQ2Cast_Spell_Routines.inc										
+|  devMovement.inc
+|  devCommon.inc											
+|  monkBotSettings.ini (you can create custom INIs nameing them monksBotSettings_name.ini			
+|  PLUGIN: MQ2Cast
+|  PLUGIN: MQ2Debuffs													
+|  PLUGIN: MQ2Exchange
+| 
+| v1.23 Update Notes
+|  -Converted to common target routine
+|  -Added ability to combat npc pets
+| 
+| v1.22 Update Notes
+|  -Converted to new global pull routine
+|  
+| v1.21 Update Notes
+|  -Fixed monk fding if it was labeled as main tank
+|  -Fixed drunken monkey style combo if drunken monkey style was not rank 1
+|  -Converted monk over to global combat check
+| 
+| v1.20 Update Notes
+|  -Added the ability to use alternate abilities in pulling
+| 
+| v1.19 Update Notes
+|  -Corrected problem in burn routine that could result in a burn set meant to be burnt once
+|    would result in continous burning
+| 
+| v1.18 Update Notes
+|  -Fixed a couple missing variables in the Load routine
+| 
+| v1.17 Update Notes
+|  -Changed EnduranceRestTo to only be used if set in pull mode
+| 
+| v1.16 Update Notes
+|  -Updated pull routine to not target mob to check for HPs until it gets closer, and also checks for
+|    unfriend PCs withing a radius of 50 of the mob before going to pull it.
+|  -Changed maximum item / spell range to 180 to accomadate new default /target distance
+| 
+| v1.15 Update Notes
+|  -Added endurance checks to pull routine using [PullSettings] {Class}MinEndurance
+| 
+| v1.14 Update Notes
+|  -Made some minor pull routine adjustments
+|  -Added PullZRadius setting to pull settings to specify how far away in the z plan a mob will be pulled
+|  -Added burn sets support
+| 
+| v1.13 Update Notes
+|  -Added INI Setting [Monk_General] EnduranceDiscRestTo=90 to determine what pct endurance
+|    the monk should rest to after using the endurance disc before re-engaging in combat
+|  -Corrected a problem with monk not sitting durring this endurance rest period
+|  -Moved some monk specific settings from [General] to [Monk_General]
+| 
+| v1.12 Update Notes
+|  -Fixed pulling to take dead mercs into account
+| 
+| v1.11 Update Notes
+|  -Updated to support MQ2Navigation movement
+| 
+| v1.10 Update Notes
+|  -Updated FDFlop in combat to work without leadership AAs.
+| 
+| v1.09 Update Notes
+|  -Added code to handle Drunken Monkey Style / Cloud of Fists combo for increased dps
+|  -Corrected problems with bot not correctly assisting while in follow mode.
+|  -Removed old mercenary code (is now handled by devCommonPremium.inc
+| 
+| v1.08 Update Notes
+|  -Fixed some bugs with pull distance when using a ranged item to pull and bandolier
+|  -Fixed a bug with pull range when using range items
+| 
+| v1.07 Update Notes
+|  -Added support for checking mana / hp of a person on the watchlist that is outside of the group if using
+|    MQ2NetBots and UseEQBC setting is TRUE
+|  -Updated for devCommonPremium.inc (looting has now changed to using the devLoot.inc)
+|  -Removed merc stance management.  This is now handled in devCommonPremium.inc
+|  -Added a target clear command when pulling to try and help with some small camp issues
+| 
+| v1.06 Update Notes
+|  -Added support for do not attack buffs, this can be used to prevent attacking mezzed mobs that are below
+|    the specified assist pct.
+| 
+| v1.05 Update Notes
+|  -Fixed a couple pulling bugs, and combat bugs if the monk was the main assist.
+| 
+| v1.04 Update Notes
+|  -Added an endurance rest loop
+|  -Corrected a typo in healcheck routine
+| 
+| v1.03 Update Notes
+|  -Fixed a bug to cause the monk to stand and sit constantly when out of combat and there is nothing
+|    nearby to pull.
+| 
+| v1.02 Update Notes
+|  -Fixed a bug that could cause the monk to try and attack something, it could not see after a mob dies if it was
+|    the main assist.
+|  -Fixed a pulling bug that caused circuitRestTime to be ignored
+| 
+| v1.01 Update Notes
+|  -Fixed a bug causing the monk to return back to camp immediately after going out to pull
+|  -Fixed a variable declaration that was causing merc stances not to change.
+| 
+| ==================================================================================================
+
+#include devCommonPremium.inc
+|#include monkBotSettings.ini
+
+#event FDFail "#1# has fallen to the ground."
+
+Sub main(string iniNameStr)
+	/declare meVersion									float outer 1.23
+	/declare myName											string outer monkbot
+	/declare myClass										string outer MNK
+	
+	/squelch /mqlog clear
+	
+	/call CommonInit
+	/varset reqCommon	2.36
+	/varset reqMovement  1.65
+	/varset debugMode FALSE
+	
+	/call EchoLog "MonkBot Initialized" true
+	/call EchoLog "Loading variables..." true
+	/if (!${Defined[iniNameStr]}) {
+		/varset iniName monkBotSettings.ini
+	} else {
+		/if (!${iniNameStr.Equal[default]}) {
+			/varset iniName monkBotSettings_${iniNameStr}.ini
+		} else {
+			/varset iniName monkBotSettings.ini
+		}
+	}
+	
+	/call LoadSettings
+	
+	/varset targCount 0
+	/declare currID											int local 0
+	:mainLoop
+		/doevents
+		/call CombatCheck
+		/if (!${inCombat} && !${followMode}) {
+			/call HealthCheck
+			/if (!${minBuffCheckTimer}) /call buffCheck
+			| /call CombatCheck
+			| /if (!${inCombat}) {
+			/if (${Me.PctEndurance} < ${enduranceDiscPct} && ${Me.CombatAbilityReady[${enduranceDisc}]}) {
+				/doability "${enduranceDisc}"
+				/delay 5 ${Me.Casting.ID}
+				:endCast
+				/if (${Me.Casting.ID}) /goto :endCast
+				/delay 2
+				:enduranceLoop
+					/doevents
+					/if (!${Me.Sitting} && ${outOfCombatSit} && !${Me.Mount.ID}) /sit on
+				/if (${Me.PctEndurance} < ${enduranceDiscRestTo} && ${pullMode}) /goto :enduranceLoop
+			}
+
+			/if (${Me.Moving} || (${pullMode} && ${pullTimer} < 150 && ${pullTimer} > 0)) /varset sitTimer 3s
+			/if (${outOfCombatSit} && ${allowSit} && !${Me.Sitting} && !${sitTimer} && !${Me.Mount.ID} && !${Me.Casting.ID} && !${Me.Moving}) /sit on			
+			| /if (!${pullTimer} && ${pullMode}) /call PullRoutine
+			/call CombatCheck			
+			/call CommonRoutines
+			| }
+		} else /if (${inCombat}) {
+			/if (${followMode}) /squelch /stick off
+			/call Combat
+			/if (${followMode}) {
+				/squelch /target ID ${followTargID}
+				/delay 1s ${Target.ID}==${followTargID}
+				/if (${Target.ID} && ${Target.ID}==${followTargID}) {
+					/squelch /stick hold 10
+				} else {
+					/call EchoLog "\ayThe follow target, \ag${followTarg} \aocould not be found again after combat, disabling follow mode."
+					/varset followMode FALSE
+				}
+			}
+		} 
+	/goto :mainLoop
+/return
+
+Sub AfterDeath
+
+/return
+
+Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
+	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/declare hMsg				string local COMPLETED_NOTFOUND
+	/declare rFromID		int local 0
+
+	/varset rFromID ${Spawn[pc ${rFrom}].ID}
+	
+	| ==========================
+	| Bot specific commands
+	| ==========================
+	/declare paramCount								int local
+	/varcalc paramCount ${rMsg.Count[ ]} + 1
+	/declare cParams[${paramCount}]		string local
+	/declare strCommand								string local
+
+	/varset strCommand ${rMsg.Token[1, ]}
+	/if (${paramCount}) {
+		/for nArray 2 to ${paramCount}
+			/varset cParams[${Math.Calc[${nArray}-1]}] ${rMsg.Token[${nArray}, ]}
+		/next nArray
+	}
+
+	/if (${strCommand.Equal[staybehind]}) {
+	| ==========================
+	| StayBehind, toggles getting behind the mob on and off
+	| ==========================		
+		/if (${stayBehind}) {
+			/varset stayBehind FALSE
+		} else {
+			/varset stayBehind TRUE
+		}
+		/varset hMsg StayBehind set to: \ag${stayBehind}
+	} else /if (${strCommand.Equal[pull]}) {
+	| ==========================
+	| Pull [pullPath], Toggles pulling on and off, sets the pull path
+	| ==========================		
+		/if (${cParams[1].NotEqual[NULL]}) {
+			/varset pullPath ${cParams[1]}
+			/if (${pullPath.Equal[default]}) /varset pullPath ${Zone.ShortName}
+			/call EchoLog "Attempting to load pull path ${pullPath}..." true
+			/call ReadINIA Path.ini ${pullPath}
+			/if (!${Defined[LocArray]} && ${pullMode}) { 
+				/call EchoLog "\ayUnable to load pull path will try to pull without a path."
+				| /varset pullMode false
+				/varset pullPath NULL
+			} 
+			/call EchoLog "Pull path loaded successfully" true
+		}
+		/if (${pullMode}) {
+			/varset pullMode FALSE
+		} else {
+			/varset pullMode TRUE
+		}
+		/varset hMsg PullMode set to: \ag${pullMode}
+	} else /if (${strCommand.Equal[pullradius]}) {
+	| ==========================
+	| PullRadius <radius>
+	| ==========================		
+		/if (${cParams[1].NotEqual[NULL]}) {
+			/varset pullRadius ${cParams[1]}
+			/varset hMsg Pulling Radius set to: \ag${pullRadius}
+		} else {
+			/varset hMsg You must specify a new radius, CMD: \agPullRadius <Radius>
+		}
+	} else /if (${strCommand.Equal[burn]}) {
+	| ==========================
+	| Burn [set], toggles burn mode on and off, if [set] is specified will burn the specified set
+	| ==========================		
+		/if (${burnMode} && ${cParams[1].Equal[NULL]}) {
+			/varset burnMode FALSE
+			/varset burnSetID 0
+			/varset burnAlias NULL
+			/varset hMsg Burnmode disabled
+		} else {
+			/varset burnAlias ${cParams[1]}
+			/if (${Math.Calc[${paramCount}-1]} > 1) {
+				/for bcArray 2 to ${Math.Calc[${paramCount}-1]}
+					/varset burnAlias ${burnAlias} ${cParams[${bcArray}]}
+				/next bcArray
+			}
+			/if (${burnAlias.NotEqual[NULL]}) {
+				/call BurnSetReady "${burnAlias}"
+				/varset mReturn ${Macro.Return}
+				/if (${mReturn}) {
+					/varset hMsg Burning set ${burnAlias}
+					/varset burnMode TRUE
+					/varset burnSetID ${mReturn}
+				} else {
+					/varset hMsg Could not burn this set because it is not ready
+					/varset burnAlias NULL
+				}
+			} else {
+				/declare burnArray		int local 0
+				/for burnArray 1 to ${burnSetCount}
+					/call BurnSetReady ${burnArray}
+					/if (${Macro.Return}) /varset burnSetID ${burnArray}
+				/if (!${burnSetID}) /next burnArray
+				/if (${burnSetID}) {		
+					/varset burnMode TRUE
+					/varset hMsg Burnmode Enabled
+				} else {
+					/varset burnMode FALSE
+					/varset hMsg No burn set could be found that was ready to be used.
+				}
+			}
+		}
+		| /varset hMsg Burn mode has been set to: \ag${burnMode}
+	} else /if ((${strCommand.Equal[always]} && ${cParams[1].Equal[burn]}) || ${strCommand.Equal[alwaysburn]}) {
+	| ==========================
+	| Always Burn [set], toggles always burn mode on and off, if [set] is specified will always burn that set
+	| ==========================		
+		/if (${alwaysBurn} && ${cParams[1].Equal[NULL]}) {
+			/varset alwaysBurn FALSE
+			/varset burnSetID 0
+			/varset burnAlias NULL
+			/varset hMsg Always burn disabled
+		} else {
+			/varset burnAlias ${cParams[1]}
+			/if (${Math.Calc[${paramCount}-1]} > 1) {
+				/for bcArray 2 to ${Math.Calc[${paramCount}-1]}
+					/varset burnAlias ${burnAlias} ${cParams[${bcArray}]}
+				/next bcArray
+			}
+			/if (${burnAlias.NotEqual[NULL]}) {
+				/call BurnSetReady "${burnAlias}"
+				/varset mReturn ${Macro.Return}
+				/if (${mReturn}) {
+					/varset hMsg Always burning set ${burnAlias}
+					/varset alwaysBurn TRUE
+					/varset burnSetID ${mReturn}
+				} else {
+					/varset hMsg Could not burn this set because it is not ready
+					/varset burnAlias NULL
+				}
+			} else {
+				/varset alwaysBurn TRUE
+				/varset hMsg Always burn Enabled
+			}
+		}
+	}
+/return ${hMsg}
+
+Sub BurnRoutine
+	/if (!${burnSetCount}) /return
+	/declare burnArray				int local 0
+	
+	/if (!${burnSetID}) {
+		/for burnArray 1 to ${burnSetCount}
+			/call BurnSetReady ${burnArray}
+			/if (${Macro.Return.Equal[TRUE]}) /varset burnSetID ${burnArray}
+		/if (!${burnSetID}) /next burnArray
+	} else /if (${burnSetUseOnce[${burnSetID}]}) {
+		/call BurnSetUsed ${burnSetID}
+		/if (${Macro.Return.Equal[TRUE]}) {
+			/call EchoLog "\agThe burn set ${burnSets[${burnSetID},1]} has been fully used."
+			/varset burnSetID 0
+			/if (!${alwaysBurn} && (${burnOneSet} || ${burnAlias.NotEqual[NULL]})) {
+				/call EchoLog "\ayBurnOneSet is enabled or a specific burn set was given, ending burn mode."
+				/varset burnMode FALSE
+				/varset burnAlias NULL
+			}
+		} else {
+		}
+	}
+	
+	/if (${burnSetID}) {
+		/for burnArray 1 to 20
+			/if (${burnSetAbilities[${burnSetID},${burnArray}].NotEqual[NULL]} && ${Me.PctHPs} > ${burnSetMinHP[${burnSetID}]} && ${Me.PctEndurance} > ${burnSetMinEndurance[${burnSetID}]}) {
+				/if (!${burnSetAbilityUsed[${burnSetID},${burnArray}]} || !${burnSetUseOnce[${burnSetID}]}) {
+					/if (${Me.CombatAbilityReady[${burnSetAbilities[${burnSetID},${burnArray}]}]} && !${discTimer}) {
+						/call EchoLog "Attempting to use burn ability [${burnSetAbilities[${burnSetID},${burnArray}]}]" TRUE
+						/doability "${burnSetAbilities[${burnSetID},${burnArray}]}"
+						/varset discTimer ${Spell[${burnSetAbilities[${burnSetID},${burnArray}]}].Duration.TotalSeconds}s
+						/call EchoLog ".....Disc timer set to ${Spell[${burnSetAbilities[${burnSetID},${burnArray}]}].Duration.TotalSeconds}s" TRUE
+						/varset burnSetAbilityUsed[${burnSetID},${burnArray}] TRUE
+					} else /if (${FindItem[${burnSetAbilities[${burnSetID},${burnArray}]}].ID} && !${FindItem[${burnSetAbilities[${burnSetID},${burnArray}]}].Timer}) {
+						/call EchoLog "Attempting to use burn ability [${burnSetAbilities[${burnSetID},${burnArray}]}]" TRUE
+						/call MQ2Cast "${burnSetAbilities[${burnSetID},${burnArray}]}" Item
+						/call EchoLog ".....Ability Result: ${CastResult}" TRUE
+						/if (${CastResult.Equal[CAST_SUCCESS]}) /varset burnSetAbilityUsed[${burnSetID},${burnArray}] TRUE
+					} else /if (${Me.AbilityReady[${burnSetAbilities[${burnSetID},${burnArray}]}]}) {
+						/call EchoLog "Attempting to use burn ability [${burnSetAbilities[${burnSetID},${burnArray}]}]" TRUE
+						/doability "${burnSetAbilities[${burnSetID},${burnArray}]}"
+						/varset burnSetAbilityUsed[${burnSetID},${burnArray}] TRUE
+					} else /if (${Me.AltAbilityReady[${burnSetAbilities[${burnSetID},${burnArray}]}]}) {
+						/call EchoLog "Attempting to use burn ability [${burnSetAbilities[${burnSetID},${burnArray}]}]" TRUE
+						/call MQ2Cast "${burnSetAbilities[${burnSetID},${burnArray}]}" alt
+						/call EchoLog ".....Ability Result: ${CastResult}" TRUE
+						/if (${CastResult.Equal[CAST_SUCCESS]}) /varset burnSetAbilityUsed[${burnSetID},${burnArray}] TRUE
+					} else /if (${Me.Class.CanCast} && ${Me.Book[${burnSetAbilities[${burnSetID},${burnArray}]}]} && ${Me.SpellReady[${burnSetAbilities[${burnSetID},${burnArray}]}]}) {
+						/call EchoLog "Attempting to use burn ability [${burnSetAbilities[${burnSetID},${burnArray}]}]" TRUE
+						/call MQ2Cast "${burnSetAbilities[${burnSetID},${burnArray}]}" gem1
+						/call EchoLog ".....Ability Result: ${CastResult}" TRUE
+						/if (${CastResult.Equal[CAST_SUCCESS]}) /varset burnSetAbilityUsed[${burnSetID},${burnArray}] TRUE
+					}
+				}
+			}
+		/next burnArray		
+	}
+/return
+
+
+Sub BurnSetUsed(burnSet)
+	/if (!${burnSetCount}) /return FALSE
+	/if (!${Defined[burnSet]}) /return FALSE
+	/declare bSetArray					int local 0
+	/declare bAbiArray					int local 0
+	
+	/for bSetArray 1 to ${burnSetCount}
+		/if (${burnSets[${bSetArray},1].Equal[${burnSet}]} || ${bSetArray}==${burnSet}) {
+			/if (${burnSetRequireAll[${bSetArray}]} || ${burnSets[${bSetArray},2]} == 1) {
+				/for bAbiArray 1 to 20
+					/if (${burnSetAbilities[${bSetArray},${bAbiArray}].NotEqual[NULL]} && !${burnSetAbilityUsed[${bSetArray},${bAbiArray}]}) /return FALSE
+				/next bAbiArray
+				/return TRUE
+			}
+		}
+	/next bSetArray	
+/return FALSE
+
+Sub BurnSetReady(burnSet)
+	/if (!${burnSetCount}) /return FALSE
+	/if (!${Defined[burnSet]}) /return FALSE
+	/declare bSetArray					int local 0
+	/declare bAbiArray					int local 0
+	/declare tAbi								string local NULL
+	/declare bID								int local 0
+	/declare burnSetNumber			int local ${burnSet}
+	
+	
+	/for bSetArray 1 to ${burnSetCount}
+		/if (${burnSets[${bSetArray},1].Equal[${burnSet}]} || ${bSetArray}==${burnSetNumber}) {
+			/varset bID ${bSetArray}
+			/if ((${Target.PctHPs} >= ${burnSetMinHP[${bSetArray}]} || !${Target.ID}) && ${Me.PctEndurance} >= ${burnSetMinEndurance[${bSetArray}]}) {
+				/if (${burnSetRequireAll[${bSetArray}]} || ${burnSets[${bSetArray},2]} == 1) {					
+					/for bAbiArray 1 to 20
+						/varset tAbi ${burnSetAbilities[${bSetArray},${bAbiArray}]}
+						/if (${tAbi.NotEqual[NULL]}) {
+							/if (${Me.CombatAbility[${tAbi}]} && !${Me.CombatAbilityReady[${tAbi}]}) /return FALSE 
+							/if (${FindItem[${tAbi}].ID} && ${FindItem[${tAbi}].Timer}) /return FALSE
+							/if (${Me.Ability[${tAbi}]} && !${Me.AbilityReady[${tAbi}]}) /return FALSE
+							/if (${Me.AltAbility[${tAbi}]} && !${Me.AltAbilityReady[${tAbi}]}) /return FALSE
+							/if (!${Me.CombatAbility[${tAbi}]} && !${FindItem[${tAbi}].ID} && !${Me.Ability[${tAbi}]} && !${Me.AltAbility[${tAbi}]}) {
+								/call EchoLog "\ayThe burn set ${burnSets[${bSetArray},1]} contains an Ability [${burSetAbilities[${bSetArray},${bAbiArray}]}] that does not appear to exist"
+								/return FALSE
+							}
+							/varset burnSetAbilityUsed[${bSetArray},${bAbiArray}] FALSE
+							/next bAbiArray
+						}
+				} else {
+					/return ${bID}
+				}
+			} else {
+				/return FALSE
+			}
+		}
+	/next bSetArray
+/return ${bID}
+
+Sub BurnSetConditionCheck
+	/if (${burnMode}) /return
+	/declare bSetArray					int local 0
+	
+	/if (${Target.Name.Find[#]}) {
+		/varset TargetNamed TRUE
+	} else {
+		/varset TargetNamed FALSE
+	}
+	/if (${autoBurnCondition.NotEqual[NULL]} && ${${autoBurnCondition}}) {
+		/varset burnSetID 0
+		/varset burnAlias NULL
+		/varset burnMode TRUE
+		/call EchoLog "\ayAuto Burn Condition has been met, initiating burn mode.  Burn sets must still be ready to be used"
+	} else {
+		/for bSetArray 1 to ${burnSetCount}
+			/if (${burnSetCondition[${bSetArray}].NotEqual[NULL]} && ${${burnSetCondition[${bSetArray}]}}) {
+				/call BurnSetReady ${bSetArray} TRUE
+				/if (${Macro.Return}) {
+					/varset burnSetID ${bSetArray}
+					/varset burnAlias ${burnSets[${bSetArray},1]}
+					/varset burnMode TRUE
+					/call EchoLog "\ayAuto burn condition has been met for set ${burnSets[${bSetArray},1]} and it is ready to be used, initiating burn for this set."
+					/return	
+				}
+			}
+		/next bSetArray
+	}
+/return
+
+Sub Combat
+	/declare currID										int local 0
+	/declare behindCheck							timer local 0s
+	/declare okAttack									bool local TRUE
+	/declare drunkenStage							int local 0
+
+	/call EchoLog "Entering combat." TRUE
+	:combatLoop
+		/doevents
+		/call CombatCheck
+		/if (${inCombat}) {
+			/if (${Target.Type.Equal[Corpse]}) /squelch /target clear
+			/call CommonCombatRoutines
+			/if (${Target.ID}==${Me.ID}) {
+					/squelch /target clear
+					/delay 1s !${Target.ID}
+			}
+		
+			/call CommonGetTarget
+			
+			/call HealthCheck
+			/if (${mainAssist.NotEqual[${Me.CleanName}]} && ${mainAssist.NotEqual[NULL]} && ${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[Pet]} && ${Target.Master.Type.NotEqual[PC]}))) {
+				/call DoNotAttackCheck
+				/varset okAttack ${Macro.Return}
+			} else {
+				/varset okAttack TRUE
+			}
+			/if (${Target.ID} && ${okAttack} && (${Target.PctHPs} <= ${assistPct} || ${mainAssist.Equal[NULL]} || ${mainAssist.Equal[${Me.CleanName}]}) && (${Math.Distance[${homeY},${homeX}:${Target.Y},${Target.X}]} < ${campRadius} || !${returnToCamp} || ${followMode} || (${Target.Fleeing} && ${Target.PctHPs} < 20)) && !${Me.Feigning} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[Pet]} && ${Target.Master.Type.NotEqual[PC]}))) {
+				/if (${Target.Distance} > 15)	/call MoveToSpawn ${Target.ID} 12 TRUE
+				/if (${Target.ID} && ${Math.Abs[${Math.Calc[${Target.HeadingTo.Degrees} - ${Me.Heading.Degrees}]}]} > 10) /face nolook
+				/if (${Target.Distance} < 5) {
+					/keypress back hold
+					/delay 2
+					/keypress back
+				}
+				/if (${stayBehind} && !${Stick.Behind} && !${behindCheck} && !${Stick.Active}) {
+					/squelch /stick behind ${Target.Distance}
+					/varset behindCheck 10s
+				} else /if (${Stick.Status.Equal[ON]} && (${Stick.Behind} || ${behindCheck}<70)) {
+					/squelch /stick off
+				}
+				| /call CheckForAggro
+				/call AggroCheck
+				/if (((${Me.LAHoTT} && ${Group.GroupSize} >= 3 && ${Me.TargetOfTarget.ID}==${Me.ID}) || ((!${Me.LAHoTT} || ${Group.GroupSize} < 3) && ${Macro.Return.Equal[TRUE]})) && ${mainTank.NotEqual[NULL]} && ${mainTank.NotEqual[${Me.CleanName}]} && ${Spawn[${mainTank}].ID} && ${Spawn[${mainTank}].Type.NotEqual[Corpse]} && ${Target.PctHPs} < 95) {
+					/call FDFlop
+				}
+				/if (!${Me.Combat}) /attack on
+
+			
+				/if (${drunkenCloudCombo}) {
+					/if ((!${drunkenStage} || ${drunkenStage} > 3) && ${Me.CombatAbilityReady[${drunkenMonkeyDisc}]}) {
+						/call EchoLog "Starting drunken monkey style"
+						/doability "${drunkenMonkeyDisc}"
+						/varset drunkenStage 1
+					} else /if (${drunkenStage} && ${drunkenStage} <= 3) {
+						/if (${Me.CombatAbilityReady[${cloudOfFistsDisc}]}) {
+							/doability "${cloudOfFistsDisc}"
+							/varcalc drunkenStage ${drunkenStage} + 1
+						}
+					}
+				} else {
+					/if (!${burnMode}) /call BurnSetConditionCheck
+					/if (${burnMode} || ${alwaysBurn}) /call BurnRoutine
+				}
+				/if (${caCount}) {
+					/for nArray 1 to ${caCount}
+						/if (${caName[${nArray}].NotEqual[NULL]}) {
+							/if ((!${Defined[caTimer${nArray}]} || !${caTimer${nArray}}) && (${Me.CombatAbilityReady[${caName[${nArray}]}]} || ${Me.AbilityReady[${caName[${nArray}]}]})) {
+								/doability "${caName[${nArray}]}"
+								:caCast
+								/if (${Me.Casting.ID}) /goto :caCast
+								/if (!${Defined[caTimer${nArray}]}) /declare caTimer${nArray}			timer outer 0s
+								/varset caTimer${nArray} ${caDly[${nArray}]}
+								/goto :exitAbility
+							}
+						}
+					/next nArray
+					:exitAbility
+				}
+				/if (${csCount}) /call CastSpell
+			} else {
+				/if (${Me.Combat}) /attack off
+				/call CombatCheck
+				/if (${inCombat}) /call PositionCheckDefault ${campRadius} TRUE
+			}
+		} else {
+			/if (${Me.Combat}) /attack off
+			/if (${Me.Feigning}) /stand
+			/varset sitTimer ${Math.Calc[${Math.Rand[9]} + 1]}s
+			/return
+		}
+	/goto :combatLoop
+/return
+
+Sub Event_FDFail(rLine,string rChar)
+	/if (${rChar.Equal[${Me.CleanName}]}) {
+		/if (${Me.Feigning}) /stand
+		/delay 1s !${Me.Feigning}
+		/if (${Me.AbilityReady[Feign Death]} && !${Me.Feigning}) {
+			/doability "Feign Death"
+			/delay 1s ${Me.Feigning}
+		} else /if (${Me.AltAbilityReady[Imitate Death]} && ${useImitate} && !${Me.Feigning}) {
+			/call MQ2Cast "Imitate Death"
+		}
+	}
+/return
+
+Sub FDFlop
+	/if (${Me.AbilityReady[Feign Death]} && !${Me.Feigning}) {
+		/doability "Feign Death"
+		/delay 1s ${Me.Feigning}
+		/doevents
+		/delay 5
+		/if (${Me.Feigning}) /stand
+	}
+/return
+
+Sub HealthCheck
+	/declare htArray								int local 0
+	/declare mercGroupMember				bool local FALSE
+	/if (${inCombat}) {
+		/if (${Me.PctHPs}<=${mendHP} && ${Me.AbilityReady[Mend]}) /doability "Mend"
+		/if (${Me.PctHPs}<=${fdHealth} && ${Me.AbilityReady[Feign Death]} && !${Me.Feigning} && !${mainTank.Equal[${Me.CleanName}]}) {
+			/doability "Feign Death"
+		} else /if (${Me.PctHPs}<=${fdHealth} && !${Me.AbilityReady[Feign Death]} && ${useImitate} && ${Me.AltAbilityReady[Imitate Death]} && !${Me.Feigning}) {
+			/call MQ2Cast "Imitate Death" alt
+		}
+	}
+	/if ((${Me.PctHPs}>=${fdStand} && ${Me.Feigning}) || (${Me.Sitting} && ${inCombat})) /stand
+	/doevents
+/return
+
+Sub LoadSettings
+	/declare xArray								int local 0
+	| ===================================
+	|  Load general settings
+	| ===================================
+	/declare stayBehind						bool outer FALSE
+	/declare fdHealth							int outer 50
+	/declare fdStand							int outer 75
+	/declare mendHP								int outer 50
+	/declare useImitate						bool outer FALSE
+	/declare enduranceDisc				string outer
+	/declare enduranceDiscPct			int outer 50
+	/declare enduranceDiscRestTo			int outer 90
+	
+	/call GetINISetting ${iniName} General StayBehind stayBehind TRUE
+
+	| Move these settings to Monk_General
+	/call GetINISetting ${iniName} General FDHealth fdHealth 50 FALSE
+	/call GetINISetting ${iniName} General UseImitate useImitate FALSE FALSE
+	/call GetINISetting ${iniName} General FDStand fdStand 75 FALSE
+	/call GetINISetting ${iniName} General MendHP mendHP 50 FALSE
+	/call GetINISetting ${iniName} General EnduranceDisc enduranceDisc NULL FALSE
+	/call GetINISetting ${iniName} General EnduranceDiscPct enduranceDiscPct 50 FALSE
+	/call GetINISetting ${iniName} General EnduranceDiscRestTo enduranceDiscRestTo 90 FALSE
+
+	/call GetINISetting ${iniName} Monk_General FDHealth fdHealth ${fdHealth}
+	/call GetINISetting ${iniName} Monk_General UseImitate useImitate ${useImitate}
+	/call GetINISetting ${iniName} Monk_General FDStand fdStand ${fdStand}
+	/call GetINISetting ${iniName} Monk_General MendHP mendHP ${mendHP}
+	/call GetINISetting ${iniName} Monk_General EnduranceDisc enduranceDisc "${enduranceDisc}"
+	/call GetINISetting ${iniName} Monk_General EnduranceDiscPct enduranceDiscPct ${enduranceDiscPct}
+	/call GetINISetting ${iniName} Monk_General EnduranceDiscRestTo enduranceDiscRestTo ${enduranceDiscRestTo}
+
+		
+	| ===================================
+	|  Load combat abilities
+	| ===================================
+	/declare caCount							int outer
+	/call GetINIArrayCount ${iniName} CombatAbilities AbilityName NULL
+	/varset caCount ${Macro.Return}
+	/call EchoLog "Loading ${caCount} Combat Abilitie(s)" true
+	/declare caName[${caCount}]		string outer
+	/declare caDly[${caCount}]		string outer
+	
+	/if (${caCount}) {
+		/for nArray 1 to ${caCount}
+			/call GetINISetting ${iniName} CombatAbilities AbilityName${nArray} caName[${nArray}] NULL
+			/call GetINISetting ${iniName} CombatAbilities AbiltyReuse${nArray} caDly[${nArray}] 0s
+			/call EchoLog ".....${nArray} - Name: ${caName[${nArray}]} Reuse Delay: ${caDly[${nArray}]}" true
+		/next nArray
+	}
+	/call GetINISetting ${iniName} CombatAbilities AbilityName${Math.Calc[${caCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} CombatAbilities AbiltyReuse${Math.Calc[${caCount}+1].Int} NULL 0s
+
+	| ===================================
+	|  Load special abilities
+	| ===================================
+	/declare drunkenCloudCombo		bool outer FALSE
+	/call GetINISetting ${iniName} Combat DrunkenCloudCombo drunkenCloudCombo FALSE
+	
+	/call CommonLoad
+
+	/varset doDebuffs FALSE
+	/varset doGroupBuffs FALSE
+	/varset doPetBuffs FALSE
+
+	| ===================================
+	|  Load burn mode attacks
+	| ===================================
+	/declare burnMode												bool outer FALSE	
+	/declare burnAlias											string outer NULL
+	/declare burnSetID											int outer 0
+	/declare alwaysBurn											bool outer FALSE
+	/call GetINISetting ${iniName} Burn AlwaysBurn alwaysBurn FALSE
+	/declare burnOneSet											bool outer TRUE
+	/call GetINISetting ${iniName} Burn BurnOneSet burnOneSet TRUE
+	/declare autoBurnCondition							string outer NULL
+	/call GetINISetting ${iniName} Burn AutoBurnCondition autoBurnCondition NULL
+	
+	/declare burnSetCount										int outer 0
+	/call GetINIArrayCount ${iniName} Burn BurnSet NULL
+	/varset burnSetCount ${Macro.Return}
+	/call EchoLog "Loading ${burnSetCount} burn sets" TRUE
+	/declare burnSets[${burnSetCount},2]					string outer
+	/declare burnSetMinHP[${burnSetCount}]				int outer
+	/declare burnSetRequireAll[${burnSetCount}]		bool outer
+	/declare burnSetUseOnce[${burnSetCount}]			bool outer
+	/declare burnSetAbilities[${burnSetCount},20]	string outer NULL
+	/declare burnSetAbilityUsed[${burnSetCount},20]	bool outer
+	/declare burnSetCondition[${burnSetCount}]		string outer NULL
+	/declare burnSetMinEndurance[${burnSetCount}]	int outer
+	
+	/for nArray 1 to ${Math.Calc[${burnSetCount}+1]}
+		/if (${nArray}<=${burnSetCount}) {
+			/call GetINISetting ${iniName} Burn BurnSet${nArray} burnSets[${nArray},1] NULL
+			/call GetINIArrayCount ${iniName} Burn BurnSet${nArray}Ability NULL
+			/varset burnSets[${nArray},2] ${Macro.Return}
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}MinHP burnSetMinHP[${nArray}] 50
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}RequireAll burnSetRequireAll[${nArray}] TRUE
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}UseOnce burnSetUseOnce[${nArray}] TRUE
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}AutoCondition burnSetCondition[${nArray}] NULL
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}MinEndurance burnSetMinEndurance[${nArray}] 25
+			/call GetINIArrayCount ${iniName} Burn BurnSet${nArray}Ability NULL
+			/call EchoLog ".....SET ${nArray}: ${burnSets[${nArray},1]} MIN HP: ${burnSetMinHP[${nArray}]} REQUIRE ALL: ${burnSetRequireAll[${nArray}]}  USE ONCE: ${burnSetUseOnce[${nArray}]} ABILITIES: ${Macro.Return} CONDITION: ${burnSetCondition[${nArray}]}" TRUE
+			/for xArray 1 to 20
+				/call GetINISetting ${iniName} Burn BurnSet${nArray}Ability${xArray} burnSetAbilities[${nArray},${xArray}] NULL
+				/if (${burnSetAbilities[${nArray},${xArray}].NotEqual[NULL]}) {
+					/call EchoLog "..........ABILITY ${xArray}: ${burnSetAbilities[${nArray},${xArray}]}" TRUE
+					/next xArray
+				}
+		} else {
+			/call GetINISetting ${iniName} Burn BurnSet${nArray} NULL NULL
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}MinHP NULL 50
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}RequireAll NULL TRUE
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}UseOnce NULL TRUE
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}AutoCondition NULL NULL
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}MinEndurance NULL 25
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}Ability1 NULL NULL
+		}
+	/next nArray
+		
+	| ===================================
+	|  Final Var Setup
+	| ===================================
+	/declare drunkenMonkeyDisc			string outer NULL
+	/declare cloudOfFistsDisc			string outer NULL
+	/if (${Me.CombatAbility[Drunken Monkey Style]}) /varset drunkenMonkeyDisc Drunken Monkey Style
+	/if (${Me.CombatAbility[Drunken Monkey Style Rk. II]}) /varset drunkenMonkeyDisc Drunken Monkey Style Rk. II
+	/if (${Me.CombatAbility[Drunken Monkey Style Rk. III]}) /varset drunkenMonkeyDisc Drunken Monkey Style Rk. III
+	/if (${Me.CombatAbility[Cloud of Fists]}) /varset cloudOfFistsDisc Cloud of Fists
+	/if (${Me.CombatAbility[Cloud of Fists Rk. II]}) /varset cloudOfFistsDisc Cloud of Fists Rk. II
+	/if (${Me.CombatAbility[Cloud of Fists Rk. III]}) /varset cloudOfFistsDisc Cloud of Fists Rk. III
+
+	/call EchoLog "MonkBot \agv${meVersion}\ao, written by \awDevestator\ao, initiated"
+	/call EchoLog "Looting Corpses: \ag${lootCorpses}"
+	/call EchoLog "Main Tank: \ag${mainTank}"
+	/call EchoLog "Main Assist: \ag${mainAssist}"
+	/call EchoLog "Puller: \ag${pullerName}"
+	/call EchoLog "INI FileName: \ag${iniName}"
+	/call EchoLog "Self Buffing: \ag${doSelfBuffs}"
+	/call EchoLog "Stay Behind: \ag${stayBehind}"
+/return
+
+Sub AggroCheck(int targID)
+	/declare mobHeading				float local
+	/declare mobToMeHeading		float local
+	/declare mobToMeDistance	float local
+	
+	/if (!${Defined[targID]} || !${targID}) {
+		/for nArray 1 to ${targCount}
+			/if (${Spawn[${targArray[${nArray}]}].ID}) {
+				/varset mobHeading ${Spawn[ID ${targArray[${nArray}]}].Heading.Degrees}
+				/varset mobToMeHeading ${Spawn[ID ${targArray[${nArray}]}].HeadingToLoc[${Me.Y},${Me.X}].Degrees}
+				/varset mobToMeDistance ${Spawn[ID ${targArray[${nArray}]}].Distance}
+				
+				/if (${Math.Abs[${mobHeading}-${mobToMeHeading}]} < 4 && ${mobToMeDistance} < ${minSafeDistance}) /return TRUE
+			}
+		/next nArray
+	} else {
+		/if (${Spawn[ID ${targID}].ID}) {
+			/varset mobHeading ${Spawn[ID ${targID}].Heading.Degrees}
+			/varset mobToMeHeading ${Spawn[ID ${targID}].HeadingToLoc[${Me.Y},${Me.X}].Degrees}
+			/varset mobToMeDistance ${Spawn[ID ${targID}].Distance}
+			
+			/if (${Math.Abs[${mobHeading}-${mobToMeHeading}]} < 4 && ${mobToMeDistance} < ${minSafeDistance}) /return TRUE
+		}
+	}
+/return FALSE

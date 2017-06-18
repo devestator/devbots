@@ -1,0 +1,1160 @@
+| =================================================================================================
+| 				MageBot2 (Premium MageBot) v4.17
+| 					Written By Devestator
+| 													
+| 													
+| USAGE: /macro mageBot2 <IniName>
+| 													
+| 													
+| Description:												
+|  -This bot is meant to automate the role of a magician, in a group or solo
+| 													
+| 													
+| Requirements:												
+|  MQ2Cast_Spell_Routines.inc										
+|  devMovement.inc
+|  devCommonPremium.inc											
+|  mageBotSettings.ini (you can create custom INIs nameing them mageBotSettings_name.ini)
+|  PLUGIN: MQ2Cast
+|  PLUGIN: MQ2Debuffs
+|  PLUGIN: MQ2Exchange
+| 
+| v4.17 Update Notes
+|  -Made some changes to pet equipping routine to use changes in MQ2 with /itemnotify and /useitem
+|  -Updated pet equip routine to destroy unfolded summoned packs after they have been used.
+| 
+| v4.16 Update Notes
+|  -Fixed a problem with mage targeting own pet when trying to give items to other pets
+|  -Converted to common target routine
+|  -Added ability to fight npc pets
+| 
+| v4.15 Update Notes
+|  -Corrected a problem with mage getting stuck in heal pet loop if pet died while healing
+|  -Added the ability to equip other pets
+|    -New Commands: equipgrouppet, equipwatchpet - enables / disables auto equipping group or watch member pets
+|      Note: If auto equipping pets, the bot cannot remember between bot runs what pets have been equipped
+|      So if you end and restart the macro, with auto equip pets enabled, it will reequip the other pets
+|      If a pet is summoned by someone else after the bot has started, it will auto equip that pet with these setings enabled
+|    -Changed command equippet to accept a pet name or a player name after to equip that pet immediately (ex 'equippet Goner')
+|    -New INI Settings: [PetSettings] EquipGroupAtStart=FALSE, EquipWatchAtStart=FALSE, EquipOtherMasterList=BST|NEC
+|      Hidden Settings: [PetSettings] PetEquipmentItemOtherX=TRUE, PetEquipmentItemSelfX=TRUE
+|      The EquipOtherMasterList can be a class or a players name to determine what other pets to auto equip.
+|      The hidden settings are used to specify whether a particular item is used on your own pet (Self), and other Pets (Other)
+| 
+| v4.14 Update Notes
+|  -Corrected a few duplicate declares and a missing declare
+| 
+| v4.13 Update Notes
+|  -Made some tweaks to work with global pull routine
+|  -Added new settings for pet AA usage 
+|    DefensiveAAHP= The pct HP the mage should be at to use defensive AAs
+|    FortifyHP= The pct HP the pet should be below to use fortify companion
+|    FortifyMinMobs= The number of living mobs that should be in camp to use fortify companion
+|    AltHealHP= The pct HP the pet should be below to use the next available alternate heal ability
+| 
+| v4.12 Update Notes
+|  -Added support for Gather Magnitude
+|  -Added auto Fortify Companion usage if the pet is below 40% health and there is more
+|    than one mob in camp.
+|  -Changed host in the shell to be able to be used in solo mode
+|  -Changed drape of shadows to not be used if the pet or the mage is set as main tank
+| 
+| v4.11 Update Notes
+|  -Added ability for the mage to be the main asist in group mode
+|  -Improved pet handling to ensure the pet is on the correct mob and always on the mob
+| 
+| v4.10 Update Notes
+|  -Updated to work with devCommonPremium.inc v2.30 which now has the SummonItem routine in it
+|  -Changed mod rod usage to use a right click instead of MQ2Cast to work around problems
+|    with MQ2Cast and MQ2Exchange
+| 
+| v4.09 Update Notes
+|  -Added PullZRadius setting to the [SoloSettings] to modify the max Z distance to pull from
+|  -Fixed a typo in the gather potential routine when attempting to use the lvl 95 gather
+|  -Added a gemtimer check to the gather potential usage if the spell is memmed
+|  -Fixed an incorrect gather potential recast time setting
+| 
+| v4.08 Update Notes
+|  -Corrected a typo causing PetHealTo setting to go to an INI named ${iniName].ini
+|  -Added support for Gather Capacity in gather usage
+|  -Made some changes to summon item to try and help ensure autoinventory works even with lag
+| 
+| v4.07 Update Notes
+|  -Added a check to ensure the mage has a pet before attempting to equip the pet.
+|  -Corrected a situation where mageBot may not target itself before summoning an item
+|  -Corrected some missing variables in the SummonPet routine dealing with shrink
+| 
+| v4.06 Update Notes
+|  -Added using Divine Companion Aura to the Pet health check as a last ditch effort
+|    to save the Pet
+| 
+| v4.05 Update Notes
+|  -Fixed missing quotes in /exchange call for pet focus item
+|  -Fixed invis casting in solo routine to target self
+|  -Fixed camp area to not try running to an unknown loc if you aren't using the path
+|  -Fixed a bug preventing mage from sitting when in solo CampArea mode.
+|  -Made the return to camp leash shorter when using CampArea=TRUE in solo mode.
+| 
+| v4.04 Update Notes
+|  -Updated pet shrink to look for shrink effects on items to shrink pet with.
+|  -Updated pet shrink to cast the shrink twice
+|  -Corrected a bug that could result in mage attempting to heal a pet that doesn't exist
+|  -Added command usepet so that you can disable using the pet (attacking with) if necessary
+| 
+| v4.03 Update Notes
+|  -Fixed potential problems with pet abilities being used when you do not have a pet.
+| 
+| v4.02 Update Notes
+|  -Fixed Gather Potential call to properly fire the correct spell when needed
+| 
+| v4.01 Update Notes
+|  -Finished solo routine, currently requires a path even if using mq2navigation
+|  -Added support for automatically using pet shrink
+|  -Corrected crash in mod rod request command
+| 
+| =================================================================================================
+
+#include devCommonPremium.inc
+|#include mageBotSettings.ini
+
+#event petState "The pet #1# mode has been set to #2#."
+#event spellComponent "You are missing some required components."
+#event petGuard "#*#Guarding with my life..oh splendid one.#*#"
+
+Sub Main(string iniNameStr)
+	/declare meVersion			float outer 4.17
+	/declare myName				string outer magebot2
+	/declare myClass			string outer MAG
+	/declare petAttackingID	int outer 0
+	/declare resumeFollow		bool local FALSE
+	
+	/squelch /mqlog clear
+	
+	/call CommonInit
+	/varset reqCommon 2.42
+	/varset reqMovement 1.66
+	/varset debugMode TRUE
+
+	/call EchoLog "MageBot2 Premium Initialized" TRUE
+	/call EchoLog "Loading variables..." TRUE
+	/if (!${Defined[iniNameStr]}) {
+		/varset iniName mageBotSettings.ini
+	} else {
+		/if (!${iniNameStr.Equal[default]}) {
+			/varset iniName mageBotSettings_${iniNameStr}.ini
+		} else {
+			/varset iniName mageBotSettings.ini
+		}
+	}
+
+	/call LoadSettings
+
+	/if (!${groupMode}) /call SoloMain
+	:mainLoop
+		/doevents
+		/call CombatCheck
+		/call CheckForAggro
+		/call HealthCheck
+		
+		/if (${Me.Moving}) /varset sitTimer 3s
+		
+		/if ((!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]}) && ${petSummonAtStart} && ${Me.PctMana} >= ${minSummonMana} && ${petSpell.NotEqual[NULL]} && ${usePet}) /call SummonPet		
+		/if (${allowSit} && ((${outOfCombatSit} && !${inCombat}) || (${inCombatSit} && ${inCombat})) && !${Me.Sitting} && !${sitTimer} && !${Me.Mount.ID} && !${gotAggro} && (!${followMode} || ${inCombat}) && !${Me.Casting.ID}) /sit on
+
+		/if (${followMode} && ${inCombat}) {
+			/call SetHome
+			/varset followMode FALSE
+			/varset resumeFollow TRUE
+			/squelch /stick off
+			/call EchoLog "Combat started while following, breaking follow to participate in combat." TRUE
+		} else /if (${resumeFollow} && !${inCombat}) {
+			/squelch /target ID ${followTargID}
+			/delay 2s ${Target.ID}==${followTargID}
+			/if (${Target.ID}==${followTargID} && ${Target.Type.NotEqual[corpse]} && ${Target.Distance} < 200) {
+				/squelch /stick hold 10
+				/varset followMode TRUE
+			} else {
+				/call EchoLog "\ayCould not find follow target to resume following after combat.  Setting home location to current location"
+				/varset followTarg NULL
+				/varset followTargID 0
+				/call SetHome
+			}			
+			/varset resumeFollow FALSE
+		}
+		
+		/if (!${inCombat} && !${followMode}) {
+			| /call SummonedItemsCheck
+			/if (${equipGroupAtStart} || ${equipWatchAtStart}) /call OtherPetEquipCheck
+			/if (!${minBuffCheckTimer}) /call buffCheck
+			/if (${pullMode} && !${petGuard} && ${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) /pet guard
+			/call CommonRoutines
+			/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]} && !${pHold} && ${usePetHold} && !${stateTimer}) {
+				/pet hold on
+				/varset stateTimer 1s
+			}
+		} else /if (${inCombat}) {			
+			|**/if (${mainAssist.NotEqual[NULL]} && ${mainAssist.NotEqual[${Me.CleanName}]}) {
+				/call GetMATarget
+				/if (${maTargetID} && ${maTargetID}!=${Target.ID}) {
+					/assist ${mainAssist}
+					/delay 1s ${Target.ID}==${maTargetID}
+					/varset engagePet TRUE
+				}
+			} else /if (!${Target.ID} || (${Target.Type.NotEqual[NPC]} && (${Target.Type.NotEqual[Pet]} || ${Target.Master.Type.Equal[PC]}))) {
+				/if (${namedCount}) {
+					/for nArray 1 to ${targCount}
+						/if (${Spawn[${targArray[${nArray}]}].Name.Left[1].Equal[#]}) {
+							/if (${Spawn[${targArray[${nArray}]}].ID} && ${Math.Distance[${Spawn[${targArray[${nArray}]}].Y},${Spawn[${targArray[${nArray}]}].X}:${homeY},${homeX}]} <= ${campRadius}) {
+								/squelch /target ID ${targArray[${nArray}]}
+								/delay 1s ${Target.ID}==${targArray[${nArray}]}
+							}
+						}
+					/if (!${Target.ID} || (${Target.Type.NotEqual[NPC]} && (${Target.Type.NotEqual[Pet]} || ${Target.Master.Type.Equal[PC]}))) /next nArray
+				}
+				/if (!${Target.ID} || (${Target.Type.NotEqual[NPC]} && (${Target.Type.NotEqual[Pet]} || ${Target.Master.Type.Equal[PC]}))) {
+					/for nArray 1 to ${targCount}
+						/if (${Spawn[${targArray[${nArray}]}].ID} && ${Math.Distance[${Spawn[${targArray[${nArray}]}].Y},${Spawn[${targArray[${nArray}]}].X}:${homeY},${homeX}]} <= ${campRadius}) {
+							/squelch /target ID ${targArray[${nArray}]}
+							/delay 1s ${Target.ID}==${targArray[${nArray}]}
+						}
+					/if (!${Target.ID} || (${Target.Type.NotEqual[NPC]} && (${Target.Type.NotEqual[Pet]} || ${Target.Master.Type.Equal[PC]}))) /next nArray
+				}
+			}**|
+			/call CommonGetTarget
+			
+			/if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[PET]} && ${Target.Master.Type.Equal[NPC]})) && ${Math.Distance[${Target.Y},${Target.X}:${homeY},${homeX}]}<=${campRadius} && (${Target.PctHPs}<=${assistPct} || ${mainAssist.Equal[${Me.CleanName}]})) {
+				| /if (${Target.ID}!=${petAttackingID}) /varset engagePet TRUE
+				/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]} && ${usePet} && ${Me.Pet.Following.ID}!=${Target.ID}) {
+					/if (${pHold}) /pet hold off
+					/pet attack
+					| /varset petAttackingID ${Target.ID}
+					| /varset engagePet FALSE
+				}
+				/if (${csCount}) /call CastSpell
+			}
+			/call CommonCombatRoutines
+		}
+	/goto :mainLoop
+/return
+
+Sub AfterDeath
+
+/return
+
+Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
+	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/declare hMsg				string local COMPLETED_NOTFOUND
+	/declare rFromID		int local 0
+	/declare ePetID			int local 0
+	
+	/varset rFromID ${Spawn[pc ${rFrom}].ID}
+	
+	| ==========================
+	| Bot specific commands
+	| ==========================
+	/declare paramCount													int local
+	/varcalc paramCount ${rMsg.Count[ ]} + 1
+	/declare cParams[${paramCount}]							string local
+	/declare strCommand													string local
+
+	/varset strCommand ${rMsg.Token[1, ]}
+	/if (${paramCount}) {
+		/for nArray 2 to ${paramCount}
+			/varset cParams[${Math.Calc[${nArray}-1]}] ${rMsg.Token[${nArray}, ]}
+		/next nArray
+	}
+
+	/if (${strCommand.Equal[Summonpet]} || (${strCommand.Equal[Summon]} && ${cParams[1].Equal[Pet]})) {
+	| ==========================
+	| Summon Pet - sets auto summoning of pet
+	| ==========================		
+		/varset petSummonAtStart ${If[${petSummonAtStart},FALSE,TRUE]}
+		/varset hMsg Pet auto summoning set to: \ag${petSummonAtStart}
+	} else /if (${strCommand.Equal[equippet]} || (${strCommand.Equal[equip]} && ${cParams[1].Equal[Pet]})) {
+	| ==========================
+	| EquipPet - sets auto equiping of pet or equips the pet
+	| ==========================
+		/if ((${cParams[1].Length} && ${cParams[1].NotEqual[NULL]} && ${cParams[1].NotEqual[Pet]}) || (${cParams[2].Length} && ${cParams[2].NotEqual[NULL]} && ${cParams[2].NotEqual[Pet]})) {
+			/if (${cParams[1].NotEqual[Pet]} && ${cParams[1].NotEqual[Pet]} && ${cParams[1].NotEqual[NULL]} && ${cParams[1].Length]}) {
+				/varset ePetID ${Spawn[=${cParams[1]}].ID}
+			} else /if (${cParams[2].NotEqual[Pet]} && ${cParams[2].NotEqual[Pet]} && ${cParams[2].NotEqual[NULL]} && ${cParams[2].Length]}) {
+				/varset ePetID ${Spawn[=${cParams[2]}].ID}
+			} else {
+				/varset ePetID ${Me.Pet.ID}
+			}
+			/if (${Spawn[${ePetID}].Type.Equal[PC]}) /varset ePetID ${Spawn[${ePetID}].Pet.ID}
+			/if (!${Spawn[${ePetID}].ID} || ${Spawn[${ePetID}].Type.NotEqual[Pet]}) {
+				/varset hMsg Could not Find the specified Pet to equip it
+			} else {
+				/if (${ePetID} && !${Spawn[${ePetID}.Name.Find[familiar]}) {
+					/call EquipPet ${ePetID}
+					/varset hMsg Pet equipping completed
+				} else {
+					/varset hMsg No Pet to equip
+				}
+			}
+		} else {
+			/varset equipAtStart ${If[${equipAtStart},FALSE,TRUE]}
+			/varset hMsg Pet auto equiping set to: \ag${equipAtStart}
+		}
+	} else /if (${strCommand.Equal[equipgrouppet]} || (${strCommand.Equal[equip]} && ${cParams[1].Equal[group]})) {
+	| ==========================
+	| EquipGroupPet - sets auto equiping of group pets
+	| ==========================		
+			/varset equipGroupAtStart ${If[${equipGroupAtStart},FALSE,TRUE]}
+			/varset hMsg Group Pet auto equiping set to: \ag${equipGroupAtStart}		
+	} else /if (${strCommand.Equal[equipwatchpet]} || (${strCommand.Equal[equip]} && ${cParams[1].Equal[watch]})) {				
+	| ==========================
+	| EquipWatchPet - sets auto equiping of watch list pets
+	| ==========================		
+			/varset equipWatchAtStart ${If[${equipWatchAtStart},FALSE,TRUE]}
+			/varset hMsg Watch List Pet auto equiping set to: \ag${equipWatchAtStart}		
+	} else /if (${strCommand.Equal[modrod]}) {
+	| ==========================
+	| ModRod <name> - summons a mod rod targetting <name> or command sender
+	| ==========================		
+		/if (${cParams[1].Equal[Me]} || ${cParams[1].Equal[NULL]}) /varset cParams[1] ${rFrom}
+		/if (${Spawn[PC ${cParams[1]}].ID}) {
+			/squelch /target PC ${cParams[1]}
+			/delay 1s ${Target.CleanName.Equal[${cParams[1]}]}
+			/if (${Target.CleanName.Equal[${cParams[1]}]} && ${Target.Distance} < ${campRadius}) {
+				/call MQ2Cast "${targettedModRod}" ${targettedModRodSlot}
+			} else {
+				/varset hMsg Unable to give ${cParams[1]} a Mod rod because they are to far away or cannot be targetted.
+			}
+		} else {
+			/varset hMsg Unable to give ${cParams[1]} a Mod rod because they do not appear to be in the Zone.
+		}
+	} else /if (${strCommand.Equal[coh]} || ${strCommand.Equal[coth]} || ${strCommand.Equal[call]}) {
+	| ==========================
+	| call <name> - cohs <name> or command sender
+	| ==========================		
+		/if (${cParams[1].Equal[Me]} || ${cParams[1].Equal[NULL]}) /varset cParams[1] ${rFrom}
+		/call EchoLog "Attempting to coh ${cParams[1]}" TRUE
+		/if (!${Defined[callType]}) /declare callType string local ${defaultGem}
+		/if (${Me.AltAbilityReady[Call of the Hero]}) {
+			/varset callType alt
+		} else {
+			/varset callType ${defaultGem}
+		}
+		/if (${Spawn[PC ${cParams[1]}].ID}) {
+			/squelch /target PC ${cParams[1]}
+			/delay 1s ${Target.CleanName.Equal[${cParams[1]}]}
+			/if (${Target.CleanName.Equal[${cParams[1]}]}) {
+				/call MQ2Cast "Call of the Hero" ${callType}
+				/varset hMsg Call of the hero attempt completed.
+			} else {
+				/varset hMsg Unable to Target ${cParams[1]} in order to CoH them.
+			}
+		} else {
+			/varset hMsg Unable to summon ${cParams[1]} because they are not in the Zone.
+		}
+	} else /if (${strCommand.Equal[usepet]}) {
+	| ==========================
+	| usepet - Toggle engaging the pet on / off
+	| ==========================				
+		/if (${usePet}) {
+			/varset usePet FALSE
+		} else {
+			/varset usePet TRUE
+		}
+		/varset hMsg Using Pet: ${usePet}
+	} else /if (${strCommand.Equal[NULL]}) {
+		/varset hMsg COMPLETED_NOTFOUND
+	}
+/return ${hMsg}
+
+Sub EquipPet(int PetID)
+	/if (!${Defined[PetID]}) /declare PetID int local ${Me.Pet.ID}
+	
+	/if (!${PetID} || !${Spawn[${PetID}].ID} || ${Spawn[${PetID}].Name.Find[familiar]}) /return
+	| /if (!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]}) /return
+	/declare allEquipped			bool local FALSE
+	/declare giveCount				int local 0
+	/declare equipSpellNum		int local 0
+	/declare tSummName				string local NULL
+	/for nArray 1 to ${petEquipmentCount}
+		/varset petEquipped[${nArray}] FALSE
+	/next nArray
+	
+	/call EchoLog "Attempting to equip the pet ${Spawn[${PetID}].CleanName} with ${petEquipmentCount} item(s)." TRUE
+	:equipLoop
+		/for nArray 1 to ${petEquipmentCount}
+			/if (!${petEquipped[${nArray}]} && ${FindItem[${petEquipmentItems[${nArray}]}].ID}) {
+				/if ((${PetID}==${Me.Pet.ID} && ${petEquipmentItemsSelf[${nArray}]}) || (${PetID}!=${Me.Pet.ID} && ${petEquipmentItemsOther[${nArray}]})) {
+					/if (!${emuMode}) {
+						/itemnotify "${petEquipmentItems[${nArray}]}" leftmouseup
+					} else {
+						/itemnotify ${FindItem[${petEquipmentItems[${nArray}]}].InvSlot} leftmouseup
+					}
+					/delay 2s ${Cursor.Name.Equal[${petEquipmentItems[${nArray}]}]}
+					/if (${Cursor.Name.Equal[${petEquipmentItems[${nArray}]}]}) {
+						/varcalc giveCount ${giveCount} + 1
+						/call EchoLog ".....Giving pet ${petEquipmentItems[${nArray}]}" TRUE
+						/call GiveToPet ${If[${giveCount}==4,TRUE,FALSE]} ${PetID}
+						/if (${giveCount}==4) /varset giveCount 0
+						/varset petEquipped[${nArray}] TRUE
+						/delay 5
+					}
+				} else {
+					/varset petEquipped[${nArray}] TRUE
+				}
+			}
+		/next nArray
+
+		/call GiveToPet TRUE ${PetID}
+		/varset giveCount 0
+		
+		/if (${equipSpellNum} && (${FindItem[${petEquipmentSpellsItem[${equipSpellNum}]}].ID} || (${summonedUnfoldedName.NotEqual[NULL]} && ${FindItem[${summonedUnfoldedName}].ID})) && !${Cursor.ID} && ${summonedPackNum}) {
+			/if (${summonedUnfoldedName.NotEqual[NULL]}) {
+				/varset tSummName ${summonedUnfoldedName}
+			} else {
+				/varset tSummName ${petEquipmentSpellsItem[${equipSpellNum}]}
+			}
+			/if (${tSummName.NotEqual[NULL]}) {
+				/itemnotify pack${summonedPackNum} leftmouseup
+				/delay 1s ${Cursor.Name.Equal[${tSummName}]}
+				/if (${Cursor.Name.Equal[${tSummName}]}) {
+					/dest
+				} else {
+					/autoinv
+				}
+			}
+			/varset tSummName NULL
+		}
+	
+		/if (${PetID}!=${Me.Pet.ID}) {
+			/call CombatCheck
+			/if (${inCombat}) {
+				/call EchoLog ".....Combat detected, aborting equipping pet" TRUE
+				/return
+			}
+		}
+		
+		/varset allEquipped TRUE
+		/for nArray 1 to ${petEquipmentCount}
+			/if (!${petEquipped[${nArray}]}) /varset allEquipped FALSE
+		/if (${allEquipped}) /next nArray
+		/if (!${allEquipped}) {
+			/varcalc equipSpellNum ${equipSpellNum} + 1
+			/if (${equipSpellNum}<=${petEquipmentSpellCount} && ${petEquipmentSpellCount} && ${petEquipmentSpells[${equipSpellNum}].NotEqual[NULL]}) {
+				/call SummonItem "${petEquipmentSpells[${equipSpellNum}]}" "${petEquipmentSpellsSlot[${equipSpellNum}]}" ${Me.CleanName} "${petEquipmentSpellsItem[${equipSpellNum}]}" TRUE TRUE
+			} else {
+				/call EchoLog ".....Unable to find and equip all pet equipment.  Not equipped:" TRUE
+				/for nArray 1 to ${petEquipmentCount}
+					/if (!${petEquipped[${nArray}]}) /call EchoLog "..........${petEquipmentItems[${nArray}]}" TRUE
+				/next nArray
+				/return
+			}
+		}
+		/delay 5
+	/if (!${allEquipped}) /goto :equipLoop
+/return
+
+Sub Event_petState(string line, string stateType, string stateSetting)
+	/if (${stateType.Find[focus]}) {
+		/if (${stateSetting.Find[on]}) {
+			/varset pFocus TRUE
+		} else {
+			/varset pFocus FALSE
+		}
+	} else /if (${stateType.Find[hold]}) {
+		/if (${stateSetting.Find[on]}) {
+			/varset pHold TRUE
+		} else {
+			/varset pHold FALSE
+		}		
+	}
+/return
+
+Sub Event_spellComponent(string line, string stateType, string stateSetting)
+	/if (${summoningPet}) {
+		/call EchoLog "\ayYou are missing components to summon your pet.  Disabling pet usage."
+		/varset usePet FALSE
+	}
+/return
+
+Sub GiveToPet(bool pressGive, int PetID)
+	/if (!${Defined[pressGive]}) /declare pressGive	bool local TRUE
+	/if (!${Defined[PetID]}) /declare PetID int local ${Me.Pet.ID}
+	
+	:targetPetLoop
+		/target ID ${PetID}
+		/delay 1s ${Target.ID}==${PetID}
+	/if (${Target.ID}!=${PetID}) /goto :targetPetLoop
+	
+	/if (${Target.Distance} > 20) {
+		/call MoveToSpawn ${PetID} 17 FALSE
+		/if (${Target.Distance} > 20) {
+			/call EchoLog ".....Could not get close enough to the pet to give the item"
+			/return
+		}
+	}
+	
+	/if (${Cursor.ID}) {
+		/click left target
+		/delay 1s
+	}
+	/if (${Window[GiveWnd].Open} && ${pressGive}) { 
+		:waitForGive
+			/notify GiveWnd GVW_Give_Button leftmouseup 
+			/delay 1s !${Window[GiveWnd].Open}
+		/if (${Window[GiveWnd].Open}) /goto :waitForGive
+		/delay 3 ${Cursor.ID}
+		/call ClearCursor
+	}		
+	/if (${Cursor.ID}) /autoinv
+/return
+
+Sub HealPet
+	:healPetLoop
+		/if (!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]}) /return
+		/if (!${Me.Casting.ID}) {
+			/if (${Me.Pet.PctHPs} <  ${petAltHealPct}) {
+				/if (${groupMode} && ${Me.AltAbilityReady[Drape of Shadows]}) {
+					/call EchoLog "Attempting to use Drape of Shadows, Pet Health: ${Me.Pet.PctHPs}" TRUE
+					/call MQ2Cast "Drape of Shadows" alt
+				} else /if (${groupMode} && ${Me.AltAbilityReady[Host in the Shell]}) {
+					/call EchoLog "Attempting to use Host in the Shell, Pet Health: ${Me.Pet.PctHPs}" TRUE
+					/call MQ2Cast "Host in the Shell" alt
+				} else /if (${Me.AltAbilityReady[Replenish Companion]}) {
+					/call EchoLog "Attempting to use Replenish Companion, Pet Health: ${Me.Pet.PctHPs}" TRUE
+					/call MQ2Cast "Replenish Companion" alt
+				} else /if (${Me.AltAbilityReady[Mend Companion]}) {
+					/call EchoLog "Attempting to use Mend Companion, Pet Health: ${Me.Pet.PctHPs}" TRUE
+					/call MQ2Cast "Mend Companion" alt
+				} else /if (${Me.AltAbilityReady[Divine Companion Aura]}) {
+					/call EchoLog "Attempting to use Divine Companion Aura, Pet Health: ${Me.Pet.PctHPs}" TRUE
+					/call MQ2Cast "Divine Companion Aura" alt
+				} else /if (!${groupMode} && ${Me.Pet.PctHPs} < 10) {
+					/call EchoLog "Pet is about to die, attempting to gate" TRUE
+					/call Evac ${campAfterGate}
+				}
+			}
+			/if (${Me.Pet.PctHPs} < ${petHealTo}) {
+				/call MQ2Cast "${petHeal}" ${petSlot} 0 CheckForAggro -targetID|${Me.Pet.ID}
+			} else {
+				/assist
+				/delay 1s
+				/if (${Target.ID} == ${Me.Pet.ID}) /squelch /target clear
+				/return
+			}
+		}
+		/doevents
+		/delay 1s
+		/if (${gotAggro}) /return
+	/goto :healPetLoop
+/return
+
+Sub HealthCheck
+	/if (${Me.PctHPs} >= ${modRodHPs} && ${Me.PctMana} <= ${modRodMana} && !${modRodName.Equal[NULL]} && ${FindItem[${modRodName}].ID} && !${FindItem[${modRodName}].Timer}) {
+		/if (!${FindItem[${modRodName}].Timer}) {
+			/call EchoLog "Mana below ${modRodMana}, attempting to use ${modRodName}" TRUE
+			/itemnotify ${FindItem[${modRodName}].InvSlot} rightmouseup
+		}
+	}
+	/if (${Me.PctMana} <= ${gatherPct} && !${gatherTimer}) {
+		/if ((${Me.Gem[Gather Magnitude]} || ${Me.Gem[Gather Capacity]} || ${Me.Gem[Gather Potential]}) && (${Me.GemTimer[${Me.Gem[Gather Magnitude]}]} || ${Me.GemTimer[${Me.Gem[Gather Capacity]}]} || ${Me.GemTimer[${Me.Gem[Gather Potential]}]})) {
+			/if (${Me.Gem[Gather Magnitude]}) /varset gatherTimer ${Math.Calc[${Me.GemTimer[${Me.Gem[Gather Magnitude]}].TotalSeconds}+1]}s
+			/if (${Me.Gem[Gather Capacity]}) /varset gatherTimer ${Math.Calc[${Me.GemTimer[${Me.Gem[Gather Capacity]}].TotalSeconds}+1]}s
+			/if (${Me.Gem[Gather Potential]}) /varset gatherTimer ${Math.Calc[${Me.GemTimer[${Me.Gem[Gather Potential]}].TotalSeconds}+1]}s
+		} else {
+			/if (${Me.Book[Gather Magnitude Rk. III]}) {
+				/call MQ2Cast "Gather Magnitude Rk. III" ${defaultGem}
+				/if (${CastResult.Equal[CAST_SUCCESS]}) /varset gatherTimer 421s
+			} else /if (${Me.Book[Gather Magnitude Rk. II]}) {
+				/call MQ2Cast "Gather Magnitude Rk. II" ${defaultGem}
+				/if (${CastResult.Equal[CAST_SUCCESS]}) /varset gatherTimer 421s
+			} else /if (${Me.Book[Gather Magnitude]}) {
+				/call MQ2Cast "Gather Magnitude" ${defaultGem}
+			} else /if (${Me.Book[Gather Capacity Rk. III]}) {
+				/call MQ2Cast "Gather Capacity Rk. III" ${defaultGem}
+				/if (${CastResult.Equal[CAST_SUCCESS]}) /varset gatherTimer 421s
+			} else /if (${Me.Book[Gather Capacity Rk. II]}) {
+				/call MQ2Cast "Gather Capacity Rk. II" ${defaultGem}
+				/if (${CastResult.Equal[CAST_SUCCESS]}) /varset gatherTimer 421s
+			} else /if (${Me.Book[Gather Capacity]}) {
+				/call MQ2Cast "Gather Capacity" ${defaultGem}
+				/if (${CastResult.Equal[CAST_SUCCESS]}) /varset gatherTimer 421s
+			} else /if (${Me.Book[Gather Potential Rk. III]}) {
+				/call MQ2Cast "Gather Potential Rk. III" ${defaultGem}
+				/if (${CastResult.Equal[CAST_SUCCESS]}) /varset gatherTimer 421s
+			} else /if (${Me.Book[Gather Potential Rk. II]}) {
+				/call MQ2Cast "Gather Potential Rk. II" ${defaultGem}
+				/if (${CastResult.Equal[CAST_SUCCESS]}) /varset gatherTimer 421s
+			} else /if (${Me.Book[Gather Potential]}) {
+				/call MQ2Cast "Gather Potential" ${defaultGem}
+				/if (${CastResult.Equal[CAST_SUCCESS]}) /varset gatherTimer 421s
+			}
+		}
+	}
+	/if (${inCombat} && ${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) {
+		/if (${Me.Pet.PctHPs} < ${petHealPct}) {
+			/if (((${Target.PctHPs} > 10 && ${Me.Pet.PctHPs} > ${Math.Calc[${petHealPct}/2]}) || ${lTargCount} > 1) && ${Me.Pet.PctHPs} < ${petHealPct}) /call HealPet
+		}
+		/if ((${Me.PctHPs} < 20 || ${Me.Pet.PctHPs} < 10) && !${groupMode}) {
+			/call EchoLog "I'm about to die, attempting to gate" TRUE
+			/call Evac ${campAfterGate}
+		} else {
+			/if (${Me.PctHPs} < ${defensiveAAHPPct} && !${defenseAATimer}) {
+				/if (${Me.AltAbilityReady[Shared Health]}) {
+					/call EchoLog "Attempting to use shared health AA" TRUE
+					/call MQ2Cast "Shared Health" alt
+					/if (${CastResult.Equal[CAST_SUCCESS]}) /varset defenseAATimer 30s
+				} else /if (${Me.AltAbilityReady[Heart of Stone]}) {
+					/call EchoLog "Attempting to use Heart of Stone AA" TRUE
+					/call MQ2Cast "Heart of Stone" alt
+					/if (${CastResult.Equal[CAST_SUCCESS]}) /varset defenseAATimer 90s
+				} else /if (${Me.AltAbilityReady[Stonecore]}) {
+					/call EchoLog "Attempting to use Stonecore AA" TRUE
+					/call MQ2Cast "Stonecore" alt
+					/if (${CastResult.Equal[CAST_SUCCESS]}) /varset defenseAATimer 2m
+				}
+			}
+			/if (${Me.Pet.PctHPs} < ${petFortifyHPPct} && ${Me.AltAbilityReady[Fortify Companion]} && ${lTargCount} >= ${petFortifyMinMobCount}) {
+				/call EchoLog "Attempting to use Fortify Companion AA" TRUE
+				/call MQ2Cast "Fortify Companion" alt
+				| /if (${CastResult.Equal[CAST_SUCCESS]}) /varset defenseAATimer 30s
+			}
+			/if (${Me.Pet.PctHPs} < ${petAltHealPct}) {
+				/if (${groupMode} && ${mainTank.NotEqual[${Me.Pet.Name}]} && ${mainTank.NotEqual[${Me.Name}]} && ${Me.AltAbilityReady[Drape of Shadows]}) {
+					/call EchoLog "Attempting to use Drape of Shadows, Pet Health: ${Me.Pet.PctHPs}" TRUE
+					/call MQ2Cast "Drape of Shadows" alt
+				} else /if (${Me.AltAbilityReady[Host in the Shell]}) {
+					/call EchoLog "Attempting to use Host in the Shell, Pet Health: ${Me.Pet.PctHPs}" TRUE
+					/call MQ2Cast "Host in the Shell" alt
+				} else /if (${Me.AltAbilityReady[Replenish Companion]}) {
+					/call EchoLog "Attempting to use Replenish Companion, Pet Health: ${Me.Pet.PctHPs}" TRUE
+					/call MQ2Cast "Replenish Companion" alt
+				} else /if (${Me.AltAbilityReady[Mend Companion]}) {
+					/call EchoLog "Attempting to use Mend Companion, Pet Health: ${Me.Pet.PctHPs}" TRUE
+					/call MQ2Cast "Mend Companion" alt
+				}
+			}			
+		}
+	}
+/return
+
+Sub LoadSettings
+	| ===============================
+	| Solo settings
+	| ===============================
+	/call EchoLog "Loading solo settings" TRUE
+	/declare soloMode												bool outer FALSE
+	/declare pathName												string outer NULL
+	/declare pullSoloRadius									float outer 100
+	/declare pullSoloZRadius								float outer 100
+	/declare restStartMana									int outer 20
+	/declare restStopMana										int outer 80
+	/declare restStartHP										int outer 60
+	/declare restStopHP											int outer 90
+	/declare campArea												bool outer FALSE
+	/declare minMobLevel										int outer 1
+	/declare maxMobLevel										int outer 105
+	/declare restInvis											bool outer TRUE
+	/declare usingPath											bool outer FALSE
+	
+	/call GetINISetting ${iniName} SoloSettings SoloMode soloMode FALSE
+	/varset groupMode ${If[${soloMode},FALSE,TRUE]}
+	/call GetINISetting ${iniName} SoloSettings PathName pathName default
+	/call GetINISetting ${iniName} SoloSettings PullRadius pullSoloRadius 100
+	/call GetINISetting ${iniName} SoloSettings PullZRadius pullSoloZRadius 100
+	/call GetINISetting ${iniName} SoloSettings CampArea campArea FALSE
+	/call GetINISetting ${iniName} SoloSettings MinMobLevel minMobLevel 1
+	/call GetINISetting ${iniName} SoloSettings MaxMobLevel maxMobLevel 105
+	/call GetINISetting ${iniName} SoloSettings StartRestMana restStartMana 40
+	/call GetINISetting ${iniName} SoloSettings StopRestMana restStopMana 80
+	/call GetINISetting ${iniName} SoloSettings StartRestHP restStartHP 60
+	/call GetINISetting ${iniName} SoloSettings StopRestHP restStopHP 90
+	/call GetINISetting ${iniName} SoloSettings InvisWhileResting restInvis TRUE
+	/call EchoLog ".....SoloMode: ${soloMode} PathName: ${pathName} PullRadius: ${pullSoloRadius} CampArea: ${campArea} RestStartMana-StopMana: ${restStartMana}-${restStopMana} RestStartHP-StopHP: ${restStartHP}-${restStopHP} RestInvis: ${restInvis}" TRUE
+
+	/if (!${groupMode} && !${campArea}) /varset usingPath TRUE
+	| ====================	
+	| Load Path
+	| ====================
+	/if (!${groupMode} && !${campArea} && ${pathName.NotEqual[NULL]}) {
+		/if (${pathName.Equal[default]}) /varset pathName ${Zone.ShortName}
+		/call EchoLog "Attempting to load path ${pathName}" TRUE
+		/call ReadINIA Path.ini ${pathName}
+		/if (!${Defined[LocArray]}) { 
+			/call EchoLog ".....\ayThere is an error in the path, unable to load. Solo mode requires a path if you aren't camping your immediate area (CampArea=TRUE setting in the INI)"
+			/endmacro 
+		} 
+		/call EchoLog ".....Path loaded successfully" TRUE
+	} else /if (!${campArea} && ${pathName.Equal[NULL]}) {
+		/call EchoLog "\aySolo mode requires a path if you aren't camping your immediate area (CampArea=TRUE setting in the INI)"
+		/endmacro
+	}
+	
+	| ===============================
+	| pet settings
+	| ===============================
+	/call EchoLog "Loading pet settings" TRUE
+	/declare petSpell												string outer
+	/declare petSlot												string outer
+	/declare petSummonAtStart								bool outer TRUE
+	/declare minSummonMana									int outer 50
+	/declare equipAtStart										bool outer TRUE
+	/declare equipGroupAtStart							bool outer FALSE
+	/declare equipWatchAtStart							bool outer FALSE
+	/declare equipOtherList									string outer BST|NEC
+	/declare petFocusItem										string outer NULL
+	/declare petHeal												string outer
+	/declare petHealSlot										string outer GEM1
+	/declare petHealPct											int outer 60
+	/declare petHealTo											int outer 60
+	/declare usePetHold											bool outer TRUE
+	/declare usePetShrink										bool outer FALSE
+	/declare usePet													bool outer TRUE
+	/declare summoningPet										bool outer TRUE
+	/declare defensiveAAHPPct								int outer 50
+	/declare petFortifyHPPct								int outer 40
+	/declare petFortifyMinMobCount					int outer 2
+	/declare petAltHealPct									int outer 25
+	/declare petGuard												bool outer FALSE
+	
+	/call GetINISetting ${iniName} PetSettings SummonAtStart petSummonAtStart TRUE
+	/call GetINISetting ${iniName} PetSettings MinimumSummonMana minSummonMana 50 FALSE
+	/call GetINISetting ${iniName} PetSettings EquipAtStart equipAtStart TRUE
+	/call GetINISetting ${iniName} PetSettings EquipGroupPetsAtStart equipGroupAtStart TRUE
+	/call GetINISetting ${iniName} PetSettings EquipWatchPetsAtStart equipWatchAtStart FALSE
+	/call GetINISetting ${iniName} PetSettings EquipOtherMasterList equipOtherList BST|NEC
+	/call GetINISetting ${iniName} PetSettings PetSpellName petSpell NULL
+	/call GetINISetting ${iniName} PetSettings PetSpellSlot petSlot GEM1
+	/call GetINISetting ${iniName} PetSettings PetFocusItem petFocusItem NULL
+	/call GetINISetting ${iniName} PetSettings PetHeal petHeal NULL
+	/call GetINISetting ${iniName} PetSettings PetHealSlot petHealSlot GEM1
+	/call GetINISetting ${iniName} PetSettings PetHealPct petHealPct 60
+	/call GetINISetting ${iniName} PetSettings PetHealTo petHealTo 60
+	/call GetINISetting ${iniName} PetSettings UsePetHold usePetHold TRUE FALSE
+	/call GetINISetting ${iniName} PetSettings ShrinkPet usePetShrink FALSE
+	/call GetINISetting ${iniName} PetSettings DefensiveAAHP defensiveAAHPPct 50
+	/call GetINISetting ${iniName} PetSettings FortifyHP petFortifyHPPct 40
+	/call GetINISetting ${iniName} PetSettings FortifyMinMobs petFortifyMinMobCount 2
+	/call GetINISetting ${iniName} PetSettings AltHealHP petAltHealPct 25
+	
+	/call EchoLog ".....Pet spell: ${petSpell} Pet Slot: ${petSlot} Pet focus item: ${petFocusItem} Use Pet Hold: ${usePetHold} ShrinkPet: ${usePetShrink}" TRUE
+	/call EchoLog ".....Pet Heal: ${petHeal} Percent: ${petHealPct} To Percent: ${petHealTo} Slot: ${petHealSlot}" TRUE
+	/call EchoLog ".....Auto summoning: ${petSummonAtStart} Auto equiping: ${equipAtStart}" TRUE
+
+	| ===============================
+	| pet equipment settings
+	| ===============================
+	/call EchoLog "Loading pet equipment settings" TRUE
+	/declare petEquipmentSpellCount		int outer 0
+	/declare petEquipmentCount				int outer 0
+	/call GetINIArrayCount ${iniName} PetSettings PetEquipmentSpell NULL
+	/varset petEquipmentSpellCount ${Macro.Return}
+	/declare petEquipmentSpells[${petEquipmentSpellCount}]			string outer
+	/declare petEquipmentSpellsSlot[${petEquipmentSpellCount}]	string outer
+	/declare petEquipmentSpellsItem[${petEquipmentSpellCount}]	string outer
+	/call GetINIArrayCount ${iniName} PetSettings PetEquipmentItem NULL
+	/varset petEquipmentCount ${Macro.Return}
+	/declare petEquipmentItems[${petEquipmentCount}]						string outer
+	/declare petEquipmentItemsOther[${petEquipmentCount}]				bool outer
+	/declare petEquipmentItemsSelf[${petEquipmentCount}]				bool outer
+	/declare petEquipped[${petEquipmentCount}]									bool outer
+	
+	/if (${petEquipmentSpellCount}) {
+		/for nArray 1 to ${petEquipmentSpellCount}
+			/call GetINISetting ${iniName} PetSettings PetEquipmentSpell${nArray} petEquipmentSpells[${nArray}] NULL
+			/call GetINISetting ${iniName} PetSettings PetEquipmentSpellSlot${nArray} petEquipmentSpellsSlot[${nArray}] GEM1
+			/call GetINISetting ${iniName} PetSettings PetEquipmentSpellItem${nArray} petEquipmentSpellsItem[${nArray}] NULL
+			/call EchoLog ".....Pet equipment spell ${nArray}: ${petEquipmentSpells[${nArray}]} Slot: ${petEquipmentSpellsSlot[${nArray}]}" TRUE
+		/next nArray
+	}
+	/call GetINISetting ${iniName} PetSettings PetEquipmentSpell${Math.Calc[${petEquipmentSpellCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} PetSettings PetEquipmentSpellSlot${Math.Calc[${petEquipmentSpellCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} PetSettings PetEquipmentSpellItem${Math.Calc[${petEquipmentSpellCount}+1].Int} NULL NULL
+	/if (${petEquipmentCount}) {
+		/for nArray 1 to ${petEquipmentCount}
+			/call GetINISetting ${iniName} PetSettings PetEquipmentItem${nArray} petEquipmentItems[${nArray}] NULL
+			/call GetINISetting ${iniName} PetSettings PetEquipmentItemOther${nArray} petEquipmentItemsOther[${nArray}] TRUE FALSE			
+			/call GetINISetting ${iniName} PetSettings PetEquipmentItemSelf${nArray} petEquipmentItemsSelf[${nArray}] TRUE FALSE
+			/call EchoLog ".....Pet equipment item ${nArray}: ${petEquipmentItems[${nArray}]}  Use for self pet: ${petEquipmentItemsSelf[${nArray}]} Use for other Pets: ${petEquipmentItemsOther[${nArray}]}" TRUE
+		/next nArray
+	}
+	/call GetINISetting ${iniName} PetSettings PetEquipmentItem${Math.Calc[${petEquipmentCount}+1].Int} NULL NULL
+	
+	| ====================
+	| Load Summoned Items
+	| ====================
+	/call EchoLog "Loading Summoned Items" true
+	/declare targettedModRod			string outer
+	/declare targettedModRodSlot	string outer
+	/declare modRodSpell					string outer
+	/declare modRodSlot						string outer
+	/declare modRodName						string outer
+	/declare modRodMana						int outer
+	/declare modRodHPs						int outer
+
+	/call GetINISetting ${iniName} Summoned ModRodSpell modRodSpell NULL
+	/call GetINISetting ${iniName} Summoned ModRodSlot modRodSlot GEM1
+	/call GetINISetting ${iniName} Summoned ModRodName modRodName NULL
+	/call GetINISetting ${iniName} Summoned ModRodMana modRodMana 25
+	/call GetINISetting ${iniName} Summoned ModRodHPs modRodHPs 60
+	/call GetINISetting ${iniName} Summoned TargettedModRodSpell targettedModRod NULL
+	/call GetINISetting ${iniName} Summoned TargettedModRodSlot targettedModRodSlot GEM1
+
+	| ====================	
+	| General settings
+	| ====================
+	/declare gatherPct										int outer 50
+
+	/call GetINISetting ${iniName} General GatherManaPct gatherPct 50
+
+	| ====================	
+	| Final var setup
+	| ====================
+	/declare modRodTimer										timer outer 0s
+	/declare pFocus													bool outer FALSE
+	/declare pHold													bool outer FALSE
+	/declare stateTimer											timer outer 0s
+	/declare defenseAATimer									timer outer 0s
+	/declare gatherTimer										timer outer 0s		
+	/declare groupPetsEquipped							string outer
+	/declare watchPetsEquipped							string outer
+	
+	/call CommonLoad
+	/tgb on
+
+	/call EchoLog "Premium MageBot2 \agv${meVersion}\ao, written by \awDevestator\ao, initiated"
+	/call EchoLog "Looting Corpses: \ag${lootCorpses}"
+	/call EchoLog "Main Tank: \ag${mainTank}"
+	/call EchoLog "Main Assist: \ag${mainAssist}"
+	/call EchoLog "Puller: \ag${pullerName}"
+	/call EchoLog "INI FileName: \ag${iniName}"
+	/call EchoLog "Debuffing: \ag${doDebuffs}"
+	/call EchoLog "Group Buffing: \ag${doGroupBuffs}"
+	/if (${doGroupBuffs}) /call EchoLog "Minimum Buff Check Time: \ag${minBuffCheckTimerStr}"
+	/call EchoLog "Self Buffing: \ag${doSelfBuffs}"
+	/if (${doAnnounce}) {
+		/call EchoLog "Announcements: \ag${announceChan}"
+	} else {
+		/call EchoLog "Announcements: \agOFF"
+	}
+	
+	/varset sitTimer ${Math.Calc[1+${Math.Rand[3]}]}s
+/return
+
+Sub Rest
+	/declare buffCheckDone		bool local FALSE
+	/if (${Me.PctMana} < ${restStartMana} || ${Me.PctHPs} < ${restStartHP} || (${useMerc} && ${Group.Member[1].Type.Equal[Mercenary]} && (${Group.Member[1].PctHPs} < ${restStartHP} || (${Group.Member[1].Class.CanCast} && ${Group.Member[1].PctMana} < ${restStartMana})))) {
+		:restLoop
+			/if (${restInvis} && !${Me.Invis}) {
+				/if (${Me.AltAbilityReady[Perfected Invisibility]}) {
+					/call MQ2Cast "Perfected Invisibility" alt
+				} else /if (${Me.AltAbilityReady[Group Perfected Invisibility]}) {
+					/call MQ2Cast "Group Perfected Invisibility" alt
+				} else /if (${Me.Book[Veil of Elements]}) {
+					/call MQ2Cast "Veil of Elements" ${defaultGem}
+				} else /if (${Me.Book[Invisibility]}) {
+					/squelch /target ID ${Me.ID}
+					/delay 2s ${Target.ID}==${Me.ID}
+					/call MQ2Cast "Invisibility" ${defaultGem}
+				}
+			}
+			/doevents
+			/if ((!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]}) && ${petSummonAtStart} && ${Me.PctMana} >= ${minSummonMana} && ${petSpell.NotEqual[NULL]}) /call SummonPet		
+			/if (${Me.Moving}) /varset sitTimer ${Math.Calc[${Math.Rand[3]}+1]}s
+			/if (!${sitTimer} && !${Me.Sitting} && !${Me.Casting.ID}) /sit on
+			/call CombatCheck
+			/if (${inCombat}) /return
+		/if (${Me.PctMana} < ${restStopMana} || ${Me.PctHPs} < ${restStopHP} || (${useMerc} && ${Group.Member[1].Type.Equal[Mercenary]} && (${Group.Member[1].PctHPs} < ${restStopHP} || (${Group.Member[1].Class.CanCast} && ${Group.Member[1].PctMana} < ${restStopMana})))) /goto :restLoop
+		/if (!${inCombat} && !${buffCheckDone}) {
+			/call SummonedItemsCheck
+			/call buffCheck
+			/varset buffCheckDone TRUE
+			/goto :restLoop
+		}
+	}
+/return
+
+Sub SoloCheckSafe
+	/declare closestMobID					int local 0
+	/declare closestMobDist				float local 400.00
+	
+	/for nArray 1 to ${targCount}
+		/if (${Spawn[${targArray[${nArray}]}].Distance} <= ${minSafeDistance} && ${Spawn[${targArray[${nArray}]}].Distance} < ${closestMobDist} && ${Spawn[${targArray[${nArray}]}].Type.Equal[NPC]}) {
+			/varset closestMobID ${targArray[${nArray}]}
+			/varset closestMobDist ${Spawn[${targArray[${nArray}]}].Distance}
+		}
+	/next nArray
+	
+	/if (${closestMobID} && ${closestMobID}!=${targID}) {
+			/call EchoLog "A mob has been detected in our minimum safe radius, attempting to move to safety once pet is engaged on it." TRUE
+			/varset targID ${closestMobID}
+			/pet attack
+			/delay 1s
+	}
+	
+	/if (${closestMobID} && ${Math.Distance[${Me.Pet.Y},${Me.Pet.X}:${Spawn[${targID}].Y},${Spawn[${targID}].X}]} <= ${minSafeDistance}) /call SoloMoveToSafety
+/return
+
+Sub SoloMain
+	/call EchoLog "Starting solo mode." TRUE
+	/call SetNearestLoc TRUE
+	/if (${Math.Distance[${LocArray[${curLoc}]}]} > 75) {
+		/if (${useNavigation}) {
+			/call Movement ${curLoc} ${curLoc} FALSE
+		} else {
+			/call EchoLog "\ayYou are to far from the closest location on the path: ${pathName}.  Location: ${LocArray[${curLoc}]} Distance: ${Math.Distance[${LocArray[${curLoc}]}]}, you need to be within 75 units of it"
+			/endmacro
+		}
+	}
+	
+	| TODO
+	|  Need to smooth out path movement so it doesn't pause at every point
+	|  Check / Fix CampArea setting so it will work
+	|  Add support for circular paths and pausing etc after running paths
+	:soloMainLoop
+		/doevents
+		/call CombatCheck
+		/call CheckForAggro
+		/call HealthCheck
+		
+		/if (${Me.Moving}) /varset sitTimer 3s
+		
+		/if ((!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]}) && ${petSummonAtStart} && ${Me.PctMana} >= ${minSummonMana} && ${petSpell.NotEqual[NULL]}) /call SummonPet		
+		/if (${allowSit} && ((${outOfCombatSit} && !${inCombat}) || (${inCombatSit} && ${inCombat})) && !${Me.Sitting} && !${sitTimer} && !${Me.Mount.ID} && !${gotAggro} && (!${followMode} || ${inCombat}) && !${Me.Casting.ID}) /sit on
+
+		/if (!${inCombat}) {
+			/if (${campArea} || (${useNavigation} && !${usingPath})) /call PositionCheckDefault ${If[${campArea},20,${campRadius}]} FALSE ${Math.Calc[${campRadius}*3]}
+			| /call SummonedItemsCheck
+			/if (!${minBuffCheckTimer}) /call buffCheck
+			/call CommonRoutines FALSE
+			/call Rest
+			/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]} && !${pHold} && ${usePetHold} && !${stateTimer}) {
+				/pet hold on
+				/varset stateTimer 1s
+			}
+			/call SoloPull
+			/call CombatCheck
+			/if (!${inCombat}) {
+				/if (${pathName.NotEqual[NULL]} && (!${useNavigation} || ${usingPath}) && !${campArea}) {
+					/if (${curLoc}<=1) {
+						/varset curLoc 1
+						/varset movVar 1
+					}
+					/if (${curLoc}>=${maxLoc}) {
+						/varset curLoc ${maxLoc}
+						/varset movVar -1
+					}
+					/varcalc curLoc ${curLoc} + ${movVar}
+					/call Movement ${curLoc} ${curLoc} FALSE
+				}
+			}
+		} else /if (${inCombat}) {
+			/call SetNearestLoc
+			/call CheckForAdds ${campRadius} ${Me.Pet.ID} TRUE
+			/call SoloCheckSafe
+			/if (${targID} && ${Target.ID}!=${targID}) {
+				/squelch /target ID ${targID}
+				/delay 1s ${Target.ID}==${targID}
+				/varset engagePet TRUE
+			}
+			/if (${Target.ID} && !${Target.LineOfSight} && ${Target.Distance} >= ${Math.Calc[${minSafeDistance}*1.25+5]} && ${useNavigation}) /call MoveToSpawn ${Target.ID} ${Math.Calc[${campRadius}-20]} TRUE FALSE TRUE ${Math.Calc[${minSafeDistance}+5]}
+			/if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[PET]} && ${Target.Master.Type.Equal[NPC]}))) {
+				/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]} && ${Me.Pet.Following.ID}!=${Target.ID}) {
+					/if (${pHold}) /pet hold off
+					/pet attack
+					| /varset engagePet FALSE
+				}
+				/if (${csCount} && ${Target.LineOfSight}) /call CastSpell
+			} else {
+				/call ChooseTarget 0 ${If[${gotAggro},${Me.ID},${Me.Pet.ID}]}
+			}
+			/call CommonCombatRoutines
+		}
+
+	/goto :soloMainLoop
+/return
+
+Sub SoloMoveToSafety
+	/declare tMoveVar						int local 0
+	/declare checkLocs[8,2]			float local
+	/declare locMod							float local 0
+	/declare safeLocCount				int local 0
+	/declare safeLocs[8,2]			float local
+	/declare safeLoc						int local
+	/declare cMobDist						float local 0
+	
+	/if (${useNavigation} && !${usingPath}) {
+		/call EchoLog ".....Building possible safe location list" TRUE
+		| Define possible safe locations
+		/varset locMod ${minSafeDistance} * 2
+		/varcalc checkLocs[1,1] ${Me.X} + ${locMod}
+		/varcalc checkLocs[1,2] ${Me.Y} + ${locMod}
+		/varcalc checkLocs[2,1] ${Me.X} + ${locMod}
+		/varcalc checkLocs[2,2] ${Me.Y} - ${locMod}
+		/varcalc checkLocs[3,1] ${Me.X} - ${locMod}
+		/varcalc checkLocs[3,2] ${Me.Y} + ${locMod}
+		/varcalc checkLocs[4,1] ${Me.X} - ${locMod}
+		/varcalc checkLocs[4,2] ${Me.Y} - ${locMod}
+
+		/varcalc locMod ${Math.Sqrt[((${minSafeDistance}*2)*(${minSafeDistance}*2))+((${minSafeDistance}*2)*(${minSafeDistance}*2))]}
+		/varcalc checkLocs[5,1] ${Me.X} + ${locMod}
+		/varcalc checkLocs[5,2] ${Me.Y}
+		/varcalc checkLocs[6,1] ${Me.X} - ${locMod}
+		/varcalc checkLocs[6,2] ${Me.Y}
+		/varcalc checkLocs[7,1] ${Me.X}
+		/varcalc checkLocs[7,2] ${Me.Y} + ${locMod}
+		/varcalc checkLocs[8,1] ${Me.X}
+		/varcalc checkLocs[8,2] ${Me.Y} - ${locMod}
+
+		| Find a safe location
+		/for nArray 1 to 8
+			/if (!${SpawnCount[npc loc ${checkLocs[${nArray},1]} ${checkLocs[${nArray},2]} radius ${Math.Calc[${minSafeDistance}*1.25]} noalert ${alertList}]}) {
+				/varcalc safeLocCount ${safeLocCount} + 1
+				/varset safeLocs[${safeLocCount},1] ${checkLocs[${nArray},1]}
+				/varset safeLocs[${safeLocCount},2] ${checkLocs[${nArray},2]}
+				/call EchoLog ".....SAFE: Location ${nArray} X: ${checkLocs[${nArray},1]} Y: ${checkLocs[${nArray},2]} has been determined to be safe." TRUE
+			} else {
+				/call EchoLog ".....UNSAFE: Location ${nArray} X: ${checkLocs[${nArray},1]} Y: ${checkLocs[${nArray},2]} has been determined to be unsafe." TRUE
+			}
+		/next nArray
+		
+		/if (${safeLocCount}) {
+			/varcalc safeLoc 1+${Math.Rand[${safeLocCount}]}
+			/call EchoLog ".....Location ${safeLoc} randomly chosen from the available safe locations.  Moving to it." TRUE
+			
+			/call MoveToLoc ${safeLocs[${safeLoc},2]} ${safeLocs[${safeLoc},1]} TRUE
+		} else {
+			/call EchoLog ".....No safe locations found." TRUE
+		}
+	} else /if (${usingPath}) {
+		/varcalc tMoveVar ${movVar}*-1
+		/varcalc curLoc ${curLoc}+${tMoveVar}
+		/if (${curLoc}<1) {
+			/varset curLoc 2
+			/varcalc movVar ${movVar}*-1
+		}
+		/if (${curLoc}>${maxLoc}) {
+			/varcalc curLoc ${maxLoc}-1
+			/varcalc movVar ${movVar}*-1
+		}
+		/call Movement ${curLoc} ${curLoc} TRUE
+	}
+/return
+
+Sub SoloPull
+	/declare mobID		int local 0
+	/declare mobNum		int local 0
+	:checkForMob
+		/varcalc mobNum ${mobNum} + 1
+		/varset mobID ${Me.NearestSpawn[${mobNum},npc Range ${minMobLevel} ${maxMobLevel} radius ${pullSoloRadius} noalert ${alertList} ${If[${useNavigation} && !${usingPath},,los]}].ID}
+		/if (${mobID}) {
+			/if (${Spawn[ID ${mobID}].DistanceZ} > ${pullSoloZRadius}) /goto :checkForMob
+			/squelch /target ID ${mobID}
+			/delay 1s ${Target.ID}==${mobID}
+			/if (${Target.ID}!=${mobID} || ${Target.PctHPs}<100) {
+				/squelch /target clear
+				/delay 1s !${Target.ID}
+				/goto :checkForMob
+			} else {
+				/call MoveToSpawn ${Target.ID} ${Math.Calc[${campRadius}-20]} FALSE FALSE TRUE
+				/if (${Target.Distance}<=${campRadius}) {
+					/pet attack
+					/delay 10s ${Math.Distance[${Target.Y},${Target.X},${Target.Z}:${Me.Pet.Y},${Me.Pet.X},${Me.Pet.Z}]} < ${minSafeDistance}
+				}
+			}
+		}
+		/call CombatCheck
+		/if (${inCombat}) /varset sitTimer ${Math.Calc[${Math.Rand[3]}+1]}s
+/return
+
+Sub SummonPet
+	/if (${petSpell.Equal[NULL]}) /return
+	/declare focusExchanged		bool local false
+	/declare focusSlot				int local 0
+	/declare oldItem					string local
+	/declare shrinkCastCount	int local 0
+	/declare shrinkItemName		string local NULL
+	
+	| Summon the pet if you don't have one
+	/if (${Me.Pet.Name.Find[familiar]} || !${Me.Pet.ID}) {
+		/call EchoLog "Summoning Pet: ${petSpell}" TRUE
+		/varset summoningPet TRUE
+		/pet get lost
+		/if (${petFocusItem.NotEqual[NULL]} && ${FindItem[${petFocusItem}].InvSlot}) {
+			/varset focusSlot ${FindItem[${petFocusItem}].WornSlot[1]}
+			/varset oldItem ${InvSlot[${focusSlot}].Item}
+			/exchange "${petFocusItem}" ${focusSlot}
+			/varset focusExchanged true
+			/call EchoLog ".....Successfully swapped in ${petFocusItem} for pet focus" TRUE
+		}
+		/delay 5
+		/call MQ2Cast "${petSpell}" ${petSlot} 0 CheckForAggro -maxtries|1
+		/delay 1s
+		/doevents
+		/if (!${Me.Pet.ID} && ${usePet}) /call MQ2Cast "${petSpell}" ${petSlot} 0 CheckForAggro -maxtries|1
+		/if (!${Me.Pet.ID}) /call EchoLog ".....\ayPet summoning failed: \ag${CastResult}"
+		/if (${focusExchanged}) {
+			/exchange "${oldItem}" ${focusSlot}
+			/call EchoLog ".....Swapped ${oldItem} back in to replace the pet focus item: ${petFocusItem}" TRUE
+		}
+	} else {
+		/call EchoLog "You already have a pet, not summoning another one" TRUE
+	}
+
+	/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) {
+		| Focus the pet
+		/pet focus on
+		/delay 1s
+		/doevents
+		/if (!${pFocus}) /pet focus on
+		
+		/if (${usePetShrink}) {
+			/if (${Me.AltAbilityReady[Diminutive Companion]}) {
+				/call MQ2Cast "Diminutive Companion" alt
+			} else {
+				/call FindItemWithEffect "Tiny Companion"
+				/varset shrinkItemName ${Macro.Return}
+				/if (${shrinkItemName.NotEqual[NULL]} || ${Me.Book[Tiny Companion]}) {
+					:castShrink
+						/if (${shrinkItemName.NotEqual[NULL]}) {
+							/call MQ2Cast "${shrinkItemName}" Item
+						} else /if (${Me.Book[Tiny Companion]}) {
+							/call MQ2Cast "Tiny Companion" ${petSpellSlot}
+						}
+						/if (${CastResult.Equal[CAST_SUCCESS]}) /varcalc shrinkCastCount ${shrinkCastCount} + 1
+					/if (${shrinkCastCount}<2) /goto :castShrink
+				}
+			}
+		}
+		
+		/if (${equipAtStart}) /call EquipPet
+	}
+	/varset summoningPet FALSE
+/return
+
+Sub Event_petGuard
+	/varset petGuard TRUE
+/return
+
+Sub OtherPetEquipCheck
+	/declare gMember			int local 0
+	/if (${equipGroupAtStart}) {
+		/for gMember 1 to ${Group.Members}
+			/if (${equipOtherList.Find[${Group.Member[${gMember}].CleanName}]} || ${equipOtherList.Find[${Group.Member[${gMember}].Class.Name}]} || ${equipOtherList.Find[${Group.Member[${gMember}].Class.ShortName}]}) {
+				/if (${Group.Member[${gMember}].Pet.ID} && !${Group.Member[${gMember}].Pet.Name.Find[familiar]} && !${groupPetsEquipped.Find[|${Group.Member[${gMember}].Pet.ID}|]}) {
+					/call EquipPet ${Group.Member[${gMember}].Pet.ID}
+					/if (${inCombat}) /return
+					/varset groupPetsEquipped ${groupPetsEquipped}|${Group.Member[${gMember}].Pet.ID}|
+				}
+			}
+		/next gMember
+	}
+	/if (${equipWatchAtStart}) {
+		/for gMember 1 to ${watchCount}
+			/if (!${Group.Member[${watchList[${gMember}]}]} && (${equipOtherList.Find[${watchList[${gMember}]}]} || ${equipOtherList.Find[${Spawn[${watchList[${gMember}]}].Class.Name}]} || ${equipOtherList.Find[${Spawn[${watchList[${gMember}]}].Class.ShortName}]})) {
+				/if (${Spawn[${watchList[${gMember}]}].Pet.ID} && !${Spawn[${watchList[${gMember}]}].Pet.Name.Find[familiar]} && !${watchPetsEquipped.Find[|${Spawn[${watchList[${gMember}]}].Pet.ID}|]}) {
+					/call EquipPet ${Spawn[${watchList[${gMember}]}].Pet.ID}
+					/if (${inCombat}) /return
+					/varset watchPetsEquipped ${watchPetsEquipped}|${Spawn[${watchList[${gMember}]}].Pet.ID}|
+				}
+			}
+		/next gMember		
+	}
+/return

@@ -1,0 +1,12 @@
+
+[BuffStackExceptions]
+Stack1=Soothing Breath|Knowledge of the Past|Reyfin's Random Musings|Maelin's Methodical Mind
+Stack2=Expanding Mind|Reyfin's Racing Thoughts|Maelin's Meditation
+Stack3=Familiar: Fiery Pyrilen|Familiar: Emerald Sokokar
+Stack4=Familiar: Icy Gelidran|Familiar: Emerald Sokokar
+
+[General]
+Version=1.02
+
+| 1.02
+| Added Ancient Flames from Ancient Cloak of Flames as a recognized auto buff
