@@ -1,0 +1,428 @@
+| ================================================================================
+|  	                    Melee assist macro
+|                      Written By: Devestator
+| 
+| USAGE: /macro meleeassist <assist> <assist pct> <camp>
+| 
+| 
+| ================================================================================
+
+#include devLoot.inc
+
+#event Enrage "#*#ENRAGED#*#"
+#event noEnrage "#*#no longer enraged#*#"
+#event tooFar "Your target is too far away, get closer!"
+#event cantSee "You cannot see your target."
+
+| To Do
+| -Add out of combat sit
+
+Sub main(string assistName,int assistAtPct,bool useCamp)
+	/declare currID					int local
+	/declare homeX					float outer
+	/declare homeY					float outer
+	/declare mobEnrage			bool outer
+	/declare sitTimer				timer local 0s
+	
+	/call LoadSettings	
+	
+	/if (${Defined[assistName]}) /varset mainAssist ${assistName}
+	/if (${Defined[assistAtPct]}) /varset assistPct ${assistAtPct}
+	/if (${Defined[useCamp]}) /varset campReturn ${useCamp}
+	
+	/if (${mainAssist.Equal[NULL]}) {
+		/echo A main Assist was not specified in the Ini nor when Running the Macro.
+		/echo USAGE: /macro meleeassist <Assist> <Assist Pct> <UseCamp>
+		/endmacro
+	}
+	
+	/varset homeX ${Me.X}
+	/varset homeY ${Me.Y}
+	
+	/echo Basic Melee Assist Macro started.
+	/echo Assist: ${mainAssist}
+	/echo Assist Pct: ${assistPct}
+	/echo Use Camp: ${campReturn}
+	
+	/call LootInit
+	:mainLoop
+		/if (${Me.Moving} || ${Me.Casting.ID}) /varset sitTimer ${Math.Rand[3]}s
+		/if (${Spawn[${mainAssist}].Distance} > 40 && !${campReturn} && (!${mercMode} || !${mercMasterID})) {
+			/squelch /target ${mainAssist}
+			/delay 1s ${Target.ID}==${Spawn[${mainAssist}].ID}
+			/squelch /stick hold 10
+			/delay 2
+			/squelch /target clear
+			/delay 1s !${Target.ID}
+		}
+		/if (${mercMode} && (!${mercMasterID} || ${mercMasterID} != ${Spawn[pc ${mercMaster}].ID})) {
+			/varset mercMasterID ${Spawn[pc ${mercMaster}].ID}
+		}
+		/if (${mercMode} && ${mercMasterID} && ${Spawn[ID ${mercMasterID}].Distance} > ${mercLeashRange} - 10) {
+			/squelch /target ID ${mercMasterID}
+			/delay 2s ${Target.ID}==${mercMasterID}
+			/if (${Target.ID}==${mercMasterID}) {
+				/squelch /stick hold 10
+				/delay 2
+				/squelch /target clear
+			}
+		}
+		/varset currID ${Target.ID}
+		/if (!${Target.ID} || ${Target.Type.NotEqual[NPC]} || ${Target.Distance} > 60) {
+			/assist ${mainAssist}
+			/delay 1s ${Target.ID}!=${currID}
+		}
+		/if (${Target.ID} && ${Target.Type.Equal[NPC]} && ${Target.Distance} < 60 && ${Target.PctHPs} <= ${assistPct}) {
+			/if (${Target.Distance} > 25) /call MoveToSpawn ${Target.ID} 15
+			| /if (${Target.Distance} > 25) /moveto ID ${Target.ID}
+			/if (${Target.Distance} <= 25) {
+				/varset mobEnrage false
+				/squelch /stick off
+				/call Combat
+				/if (${campReturn} && !${mercMode}) {
+					/call MoveToLoc ${homeY} ${homeX}
+				} else {
+					/varset homeY ${Me.Y}
+					/varset homeX ${Me.X}
+					/if (${mercMode} && ${mercMasterID}) {
+						/squelch /target ID ${mercMasterID}
+						/delay 2s ${Target.ID}==${mercMasterID}
+						/if (${Target.ID}==${mercMasterID}) {
+							/squelch /stick hold 10
+							/delay 2
+							/squelch /target clear
+						}
+					}
+				}
+			} else /if (${campReturn} && !${mercMode}) {
+				/echo Could not get to Spawn Moving back to camp.
+				/call MoveToLoc ${homeY} ${homeX}
+			} else /if (${mercMode} && ${mercMasterID}) {
+				/echo Could not get to Spawn moving to merc master ${mercMaster}
+				/squelch /target ID ${mercMasterID}
+				/delay 2s ${Target.ID}==${mercMasterID}
+				/if (${Target.ID}==${mercMasterID}) {
+					/squelch /stick hold 10
+					/delay 2
+					/squelch /target clear
+				}
+			}
+		} else {
+			/if (!${Me.Sitting} && !${sitTimer} && ${outOfCombatSit} && !${Stick.Active}) /sit on
+		}	
+		| else /if (${Target.ID} && ${Target.Type.Equal[NPC]} && ${Target.Distance} > 60 && !${campReturn}) {
+		| 	 /call MoveToSpawn ${Target.ID} 40
+		| }
+	/goto :mainLoop
+/return
+
+Sub GetINISetting(string ININame,string INISection,string INIKey,string VariableName,string defaultValue,bool createSetting)
+	/if (!${Defined[ININame]}) /return INVALIDINI
+	/if (!${Defined[INISection]}) /return INVALIDSECTION
+	/if (!${Defined[INIKey]}) /return INVALIDKEY
+	/if (!${Defined[VariableName]}) /return INVALIDVARIABLE
+	/if (!${Defined[createSetting]}) /declare createSetting 	bool local TRUE
+	/if (!${Defined[defaultValue]}) /declare defaultValue 		string local NULL
+	/declare iniValue						string local NULL
+	
+	/varset iniValue ${Ini[${ININame},${INISection},${INIKey},DOES_NOT_EXIST]}
+	/if (${iniValue.Equal[DOES_NOT_EXIST]}) {
+		/if (${createSetting}) /ini "${ININame}" "${INISection}" "${INIKey}" "${defaultValue}"
+		/varset iniValue ${defaultValue}
+	}
+	/varset ${VariableName} ${iniValue}
+/return COMPLETED
+
+Sub LoadSettings
+	/declare iniName				string outer MA_${Me.CleanName}.ini
+	/declare campReturn			bool outer FALSE
+	/declare mainAssist			string outer
+	/declare mercMode				bool outer FALSE
+	/declare mercMaster			string outer NULL
+	/declare mercMasterID		int outer 0
+	/declare mercLeashRange	int outer 60
+	/declare assistPct			int outer 97
+	/declare nArray					int outer 0
+	/declare lootCorpses		bool outer FALSE
+	/declare outOfCombatSit bool outer TRUE
+	
+	/call GetINISetting ${iniName} General LootCorpses lootCorpses FALSE
+	| /varset lootCorpses ${Ini[${iniName},General,LootCorpses,FALSE]}
+	| /varset campReturn ${Ini[${iniName},General,UseCamp,FALSE]}
+	/call GetINISetting ${iniName} General UseCamp campReturn TRUE
+	| /varset mainAssist ${Ini[${iniName},General,MainAssist,NULL]}
+	/call GetINISetting ${iniName} General MainAssist mainAssist PlayerName
+	| /varset assistPct ${Ini[${iniName},General,AssistPct,97]}
+	/call GetINISetting ${iniName} General AssistPct assistPct 97
+	/call GetINISetting ${iniName} General MercMode mercMode FALSE
+	/call GetINISetting ${iniName} General MercMaster mercMaster NULL
+	/call GetINISetting ${iniName} General MercLeashRange mercLeashRange 60
+	/call GetINISetting ${iniName} General OutOfCombatSit outOfCombatSit TRUE
+	
+	/varset mercMasterID ${Spawn[pc ${mercMaster}].ID}
+	
+	| ===================================
+	|  Load combat abilities
+	| ===================================
+	/declare caCount							int outer 0
+	| /varset caCount ${Ini[${iniName},CombatAbilities,Value,0]}
+	/declare caName[20]		string outer
+	/declare caDly[20]		string outer
+	
+	| /if (${caCount}) {
+		/for nArray 1 to 20
+			/call GetINISetting ${iniName} CombatAbilities AbilityName${nArray} caName[${nArray}] NULL
+			/call GetINISetting ${iniName} CombatAbilities AbilityReuse${nArray} caDly[${nArray}] 0s
+			/if (${caName[${nArray}].NotEqual[NULL]}) {
+				/varcalc caCount ${caCount} + 1
+				| /varset caName[${nArray}] ${Ini[${iniName},CombatAbilities,AbilityName${nArray},NULL]}
+				| /varset caDly[${nArray}] ${Ini[${iniName},CombatAbilities,AbilityReuse${nArray},0s]}
+				/next nArray
+			}
+	| }
+	/if (${mainAssist.Equal[PlayerName]}) {
+		/echo An Ini has been created for this character named MA_${Me.CleanName}.ini
+		/echo Please make sure all settings are as you want it in this Ini and then run the Macro again
+		/endmacro
+	}
+/return
+
+Sub Combat
+	/declare currID									int local
+	/declare getBehindAttempted			bool local
+	/declare behindMob							bool local
+	
+	:combatLoop
+		/if (${mercMode} && ${mercMasterID} && ${Spawn[ID ${mercMasterID}].Distance} > ${mercLeashRange} - 10) {
+			/squelch /target ID ${mercMasterID}
+			/delay 2s ${Target.ID}==${mercMasterID}
+			/if (${Target.ID}==${mercMasterID}) {
+				/squelch /stick hold 10
+				/delay 2
+				/squelch /target clear
+				/delay 30s ${Spawn[ID ${mercMasterID}].Distance}<15
+				/squelch /stick off
+			}
+		}
+		/varset currID ${Target.ID}
+		/assist ${mainAssist}
+		/delay 1s ${Target.ID}!=${currID}	
+		/if (${Target.ID}!=${currID}) /varset getBehindAttempted false
+		/if (${Target.ID} && ${Target.Type.Equal[NPC]} && ${Target.Distance} < 60 && ${Target.PctHPs} < ${assistPct}) {
+			/if (!${getBehindAttempted}) {
+				/squelch /stick off
+				/squelch /stick behindonce 12
+				/varset getBehindAttempted true
+			}
+			/if (!${Me.Combat} && !${mobEnrage}) /attack on
+			/if (${Me.Combat} && ${mobEnrage}) {
+				/pet back off
+				/if (${Math.Abs[${Target.Heading.Degrees} - ${Target.HeadingToLoc[${Me.Y},${Me.X}].Degrees}]} < 120) {
+					/attack off
+				} else {
+					/if (!${Me.Combat}) /attack on					
+				}				
+			}
+
+			/if (${caCount}) {
+				/for nArray 1 to ${caCount}
+					/if (${caName[${nArray}].NotEqual[NULL]}) {
+						/if ((!${Defined[caTimer${nArray}]} || !${caTimer${nArray}}) && (${Me.CombatAbilityReady[${caName[${nArray}]}]} || ${Me.AbilityReady[${caName[${nArray}]}]})) {
+							/doability "${caName[${nArray}]}"
+							:caCast
+							/if (${Me.Casting.ID}) /goto :caCast
+							/if (!${Defined[caTimer${nArray}]}) /declare caTimer${nArray}			timer outer 0s
+							/varset caTimer${nArray} ${caDly[${nArray}]}
+							/goto :exitAbility
+						}
+					}
+				/next nArray
+				:exitAbility
+			}			
+		} else {
+			/varset mobEnrage false
+			/if (${Me.Combat}) /attack off
+			/squelch /stick off
+			/varset currID ${Target.ID}
+			/assist ${mainAssist}
+			/delay 1s ${Target.ID}!=${currID}
+			/if (!${Target.ID} || ${Target.Type.NotEqual[NPC]}) {
+				/if (${lootCorpses}) /call Loot
+				| /if (!${campReturn}) {
+				| 	/squelch /target ${mainAssist}
+				| 	/delay 1s ${Target.ID}==${Spawn[${mainAssist}].ID}
+				| 	/if (${Target.Type.Equal[Pet]}) {
+				| 		/squelch /target ID ${Target.Master.ID}
+				| 		/delay 1s ${Target.ID}==${Spawn[pc ${mainAssist}].ID}
+				| 	}
+				| 	/squelch /stick hold 10
+				| 	/delay 2
+				| 	/squelch /target clear
+				| 	/delay 1s !${Target.ID}
+				| 	/return
+				| } else {
+					/return
+				| }
+			} else /if (${Target.ID} && ${Target.Type.Equal[NPC]} && ${Target.Distance} < 60) {
+			 	/varset getBehindAttempted false
+			}
+		}
+	/goto :combatLoop
+/return
+
+Sub MoveToSpawn(int MoveToID, int StopDistance) 
+	/if (!${Defined[MoveToID]} || !${Spawn[${MoveToID}].ID}) { 
+		/echo MoveToSpawn:  Spawn ID not found or no ID provided. Aborting... 
+		/return
+	} 
+  /if (!(${Defined[StopDistance]})) { 
+		/echo MoveToSpawn:  Stopping point not defined, using default distance of 20
+    /declare StopDistance int local 
+    /varset StopDistance 20
+  }
+
+  /declare running						int local 0
+  /declare distanceNow				float local 
+  /declare distanceBefore			float local ${Spawn[${MoveToID}].Distance} 
+  /declare distanceModifier		int local 1
+  /declare distanceTimer			timer local 10
+  /squelch /stick off
+  
+  :moveToSpawn
+  	/if (!${Spawn[${MoveToID}].ID}) /return
+		/squelch /face fast nolook id ${MoveToID} 
+		
+	  /if (${Spawn[${MoveToID}].Distance}<${StopDistance}) { 
+	    /keypress forward 
+	    /return
+	  }
+	  
+	  /if (!${distanceTimer}) {
+	    /if (${Me.Sneaking}) { 
+	        /varset distanceModifier 2 
+	    } else { 
+	        /varset distanceModifier 1 
+	    } 
+	
+	    /varset distanceNow ${Spawn[${MoveToID}].Distance} 
+	    /if (${Math.Calc[${distanceBefore}-${distanceNow}]}<${Math.Calc[10/${distanceModifier}]} && ${distanceBefore}) /call strafePastObstacle 
+	    /varset distanceBefore ${Spawn[${MoveToID}].Distance} 
+	    /varset distanceTimer 15 
+	 	} 
+	
+	  /if (!${running}) { 
+	      | /keypress forward 
+	      /if (${Spawn[${MoveToID}].Distance}>=${StopDistance}) { 
+	          /varset running 1 
+	          /keypress forward hold 
+	      } 
+	  } else { 
+	      /if (${Spawn[${MoveToID}].Distance}<${StopDistance}) { 
+	          /varset running 0 
+	          /keypress forward 
+	      } 
+	  }
+		| /doevents
+	/goto :moveToSpawn 
+/return
+
+Sub MoveToLoc(float MoveToY, float MoveToX)
+	/declare running 			int local  0
+	/declare distanceNow 		float local 
+	/declare distanceBefore 	float local 
+	/declare distanceModifier 	int local 1
+	/declare distanceTimer		timer 15
+	
+	/if (!${Defined[MoveToY]} || !${Defined[MoveToX]}) {
+		/echo The y and or x coordinates were not specified to move to, not attempting movement.
+		/return
+	}
+
+  :moveToLocation 
+		/if (${Math.Distance[${Me.Y},${Me.X}:${MoveToY},${MoveToX}]}>200) {
+			/echo The MoveToLoc is to far from our current location to move to
+			/return
+		}	
+		/face fast nolook loc ${MoveToY},${MoveToX}
+	
+	  /if (${Math.Distance[${Me.Y},${Me.X}:${MoveToY},${MoveToX}]}<6) { 
+	    /keypress forward 
+	    /return
+	  }
+	  
+	  /if (!${distanceTimer}) { 
+	    /if (${Me.Sneaking}) { 
+	        /varset distanceModifier 2 
+	    } else { 
+	        /varset distanceModifier 1 
+	    } 
+	
+			/varset distanceNow ${Math.Distance[${Me.Y},${Me.X}:${MoveToY},${MoveToX}]} 
+			/if (${Math.Calc[${distanceBefore}-${distanceNow}]}<${Math.Calc[6/${distanceModifier}]} && ${distanceBefore})	/call strafePastObstacle 
+		
+			/varset distanceBefore ${Math.Distance[${Me.Y},${Me.X}:${MoveToY},${MoveToX}]} 
+	    /varset distanceTimer 15 
+	  } 
+	
+	  /if (!${running}) { 
+	    /keypress forward 
+	    /if (${Math.Distance[${Me.Y},${Me.X}:${MoveToY},${MoveToX}]}>6) { 
+	      /varset running 1 
+	      /keypress forward hold 
+	    } 
+	  } else { 
+	    /if (${Math.Distance[${Me.Y},${Me.X}:${MoveToY},${MoveToX}]}<=6) { 
+	      /varset running 0 
+	      /keypress forward 
+	    } 
+	  }
+	/goto :moveToLocation 
+/return
+
+Sub strafePastObstacle
+  /keypress forward
+  /keypress back hold
+  /delay 3
+  /keypress back
+
+  /if (${Math.Rand[99]}>50 ) { 
+      /keypress strafe_right hold
+  } else {
+      /keypress strafe_left hold 
+  } 
+  /delay 1s 
+  /keypress strafe_right 
+  /keypress strafe_left 
+  /keypress forward hold 
+/return 
+
+Sub Event_Enrage
+	/varset mobEnrage true
+/return
+
+Sub Event_noEnrage
+	/varset mobEnrage false
+/return
+
+Sub Event_tooFar
+	/doevents flush tooFar
+	/if (${Target.Distance} < 60) {
+		/squelch /stick off
+		/call MoveToSpawn ${Target.ID}, 15
+		/if (${Target.Distance}<20) /stick behind 12
+	}
+	/doevents flush tooFar
+/return
+
+Sub Event_cantSee
+	/doevents flush cantSee
+	/if (${Target.Distance} < 20) {
+		/squelch /stick off
+		/face nolook
+		/keypress back hold
+		/delay 3
+		/keypress back
+		/stick 12
+	}
+	/doevents flush cantSee
+/return

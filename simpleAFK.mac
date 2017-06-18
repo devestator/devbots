@@ -1,0 +1,424 @@
+| ================================================================================
+| 	                    Afk path bot macro
+|                      Written By: Devestator
+| 
+| USAGE: /macro simpleAFK <iniName> <pathName>
+| 
+| ================================================================================
+
+#include devMovement.inc
+#include devLoot.inc
+#include MQ2Cast_Spell_Routines.inc
+|#include simpleAFK.ini
+|#include pathrecord.mac
+
+#event died "You have been slain#*#"
+
+Sub main(string iniLoad,string pName)
+	/declare firstRun							bool outer TRUE
+	/declare iniName							string outer
+	/declare sID									int local 0
+	/declare mobNum								int local 0
+	/if (!${Defined[iniLoad]} || ${iniLoad.Equal[default]}) {
+		/varset iniName simpleAFK.ini
+	} else {
+		/varset iniName simpleAFK_${iniLoad}.ini
+	}
+	
+	/declare pathName							string outer
+	/declare pNameSet							bool outer FALSE
+	/if (!${Defined[pName]} || ${pName.Equal[default]}) {
+		/varset pathName ${Zone.ShortName}
+	} else {
+		/varset pathName ${pName}
+		/varset pNameSet TRUE
+	}
+	
+	/call MovementInit
+	/call LoadSettings
+		
+	/call ReadINIA "path.ini" ${pathName}
+	/if (${maxLoc} <= 1) {
+		/echo The path ${pathName} does not have more than 1 loc on it.
+		/echo We will attempt to just sit in the spot where the Macro was started and kill mobs.
+		/varset allowMove false
+	}
+	
+	/if (${allowMove}) {
+		/echo Moving to nearest loc on the path before starting.
+		/call SetNearestLoc
+		/call Movement ${curLoc} ${curLoc}
+		/varset homeX ${Me.X}
+		/varset homeY ${Me.Y}
+	}
+	
+	/squelch /target clear
+	/varset circuitHadMobs TRUE
+	/varset inCombat FALSE
+	:mainLoop
+		/doevents
+		/if (${Me.State.Equal[HOVER]}) /call Event_died
+		/if (${Zone.ID}!=${startZone}) {
+			/echo We are no longer in the Zone we started in somehow.
+			/echo Ending Macro and camping
+			/camp
+			/endm
+		}
+		/if (!${buffCheckTimer}) /call BuffCheck
+		/if (${Spawn[npc Range ${minLvl} ${maxLvl} radius ${mobRadius} los].ID}) {
+			/varset mobNum 0
+			:nextMob
+			/varset sID 0
+			/varcalc mobNum ${mobNum} + 1
+			/varset sID ${Me.NearestSpawn[${mobNum},npc Range ${minLvl} ${maxLvl} radius ${mobRadius} los alert 50 noalert 51].ID}
+			/if (${sID}) {
+				/squelch /target ID ${sID}
+				/delay 1s ${Target.ID}==${sID}
+				/if (${Target.ID}==${sID} && ${Target.PctHPs} < 99) {
+					/squelch /target clear
+					/delay 1s !${Target.ID}
+					/goto :nextMob
+				} else /if (${Target.ID}!=${sID}) {
+					/squelch /target clear
+					/delay 1s !${Target.ID}
+				}
+			}
+		}
+		/if (${Target.ID} && ${Target.Type.Equal[NPC]} && ${Target.LineOfSight} && ${Target.Distance} <= ${mobRadius}) {
+			/if (${Target.Distance} > 100) {
+				/call MoveToSpawn ${Target.ID} 80
+			}
+			/varset circuitHadMobs TRUE
+			/call Combat
+			/varset inCombat FALSE
+			/call HealCheck
+			/if (${allowMove}) {
+				/call Movement ${curLoc} ${curLoc}
+			} else {
+				/if (${useCamp}) /call MoveToLoc ${homeY} ${homeX}
+			}
+			/call Rest
+		}
+		
+		/if (${Math.Distance[${homeY},${homeX}]} > 50 && !${inCombat} && ${useCamp}) /call MoveToLoc ${homeY} ${homeX}
+		/if (${allowMove} && !${inCombat}) {
+			/varcalc curLoc ${curLoc} + ${movVar}
+			/if (${curLoc} > ${maxLoc}) {
+				/if (${circularPath}) {
+					/varset movVar 1
+					/varset curLoc 1
+				} else {
+					/varset movVar -1
+					/varcalc curLoc ${maxLoc} - 1
+				}
+			} else /if (${curLoc} < 1) {
+				/varset movVar 1
+				/varset curLoc 2
+			}
+			/call Movement ${curLoc} ${curLoc} 
+			/varset homeY ${Me.Y}
+			/varset homeX ${Me.X}
+		}
+		/if (${curLoc}==1 && !${circuitHadMobs} && !${firstRun}) {
+			/if (!${Defined[circuitRestTimer]}) /declare circuitRestTimer timer outer 0s
+			/varset circuitRestTimer ${circuitRestTime}
+			:circuitRest
+				/if (${Spawn[npc Range ${minLvl} ${maxLvl} radius ${mobRadius} los].ID}) /goto :exitCircuitRest
+			/if (${circuitRestTimer}) /goto :circuitRest
+			:exitCircuitRest
+		} else /if (${curLoc}==1) {
+			/varset circuitHadMobs FALSE
+			/varset firstRun FALSE
+		}
+	/goto :mainLoop	
+/return
+
+Sub Combat
+	/echo Starting Combat with ${Target.CleanName}
+	/varset targID ${Target.ID}
+	/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) /pet attack
+	
+	/varset buffCheckTimer 0s
+	/call ResetTimers
+	:combatLoop
+		/delay 1s
+		/varset inCombat true
+		/doevents
+		/if (${Me.State.Equal[HOVER]}) /call Event_Died
+		/call HealCheck
+		/if (${Target.ID} && ${Target.Type.Equal[npc]} && ${Target.LineOfSight} && ${Target.Distance} <= ${mobRadius}) {
+			/varset targID ${Target.ID}
+			/call BuffCheck
+			/if (${meleeMobs} && !${Me.Combat}) {
+				/squelch /stick hold 12
+				/attack on
+			}
+			/if (${abilityCount}) {
+				/for nArray 1 to ${abilityCount}
+					/if (!${abilitiesTimer${nArray}} && (${Me.AbilityReady[${abilities[${nArray}]}]} || ${Me.CombatAbilityReady[${abilities[${nArray}]}]})) {
+						/doability "${abilities[${nArray}]}"
+						/varset abilitiesTimer${nArray} ${abilitiesReuse[${nArray}]}
+						/goto :exitAbilities
+					} else /if (!${abilitiesTimer${nArray}} && ${Me.AltAbilityReady[${abilities[${nArray}]}]}) {
+						/call MQ2Cast "${abilities[${nArray}]}" alt
+						/if (${Cast.Result.Equal[CAST_SUCCESS]}) {
+							/varset abiblitiesTimer${nArray} ${abiltiesReuse[${nArray}]}
+							/goto :exitAbilities
+						} else /if (${Cast.Result.Equal[CAST_IMMUNE]} || ${Cast.Result.Equal[CAST_TAKEHOLD]}) {
+							/varset abilitiesTimer${nArray} 5m
+							/goto :exitAbilities
+						}
+					}
+				/next nArray
+				:exitAbilities
+			}
+			/if (${spellCount}) {
+				/for nArray 1 to ${spellCount}
+					/if (!${spellsTimer${nArray}} && (${Me.SpellReady[${spells[${nArray}]}]} || (${FindItem[${spells[${nArray}]}].InvSlot} && !${FindItem[${spells[${nArray}]}].Timer}) || ${Me.AltAbilityReady[${spells[${nArray}]}]})) {
+						/face
+						/call MQ2Cast "${spells[${nArray}]}" ${spellsSlot[${nArray}]}
+						/if (${Cast.Result.Equal[CAST_SUCCESS]}) {
+							/varset spellsTimer${nArray} ${spellsReuse[${nArray}]}
+							/goto :exitSpells
+						} else /if (${Cast.Result.Equal[CAST_IMMUNE]} || ${Cast.Result.Equal[CAST_TAKEHOLD]}) {
+							/varset spellsTimer${nArray} 5m
+							/goto :exitSpells
+						}
+					}
+				/next nArray
+				:exitSpells
+			}
+		} else {
+			/if (${targID} && ${Spawn[${targID}].ID} && ${Spawn[${targID}].Distance} < ${mobRadius} && ${Spawn[${targID}].Type.Equal[NPC]}) {
+				/squelch /target ID ${targID}
+				/delay 1s ${Target.ID}==${targID}
+			} else {
+				/squelch /target clear
+				/delay 1s !${Target.ID}
+				/delay 2s
+				/if (${Target.ID} && ${Target.Type.Equal[NPC]} && ${Target.Distance} < ${mobRadius}) {
+					/varset targID ${Target.ID}
+				} else {
+					/squelch /stick off
+					/squelch /target clear
+					/echo Combat Completed!
+					/if (${lootCorpses}) /call Loot
+					/return
+				}
+			}
+		}
+	/goto :combatLoop
+/return
+
+Sub Event_died
+	/delay ${deathDelayStr}
+	/if (${Window[RespawnWnd].Open}) {
+		/nomodkey /notify RespawnWnd RW_SelectButton leftmouseup
+	}
+	/delay 45s
+	/if (${Zone.ID}==${startZone}) {
+		/call SetNearestLoc
+		/call Movement ${curLoc} ${curLoc}
+		/call Rest
+	} else {
+		/echo We have died, ending Macro
+		/endmacro
+	}
+/return
+
+Sub BuffCheck
+	/if (${buffCheckTimer}) /return
+	/if (${buffCount}) {
+		/for nArray 1 to ${buffCount}
+			/if (!${Me.Buff[${buffs[${nArray}]}].ID} && !${Me.Buff[${buffsText[${nArray}]}].ID}) {
+				/if (${inCombat}==${buffsCombat[${nArray}]}) {
+					/squelch /target ID ${Me.ID}
+					/delay 1s ${Target.ID}==${Me.ID}
+					/call MQ2Cast "${buffs[${nArray}]}" ${buffsSlot[${nArray}]}
+				}
+			}
+		/next nArray
+	}
+	/varset buffCheckTimer 1m
+/return
+
+Sub HealCheck
+	/declare currTargID				int local 0
+	/if (${Me.PctHPs} < ${healPct} && ${healName.NotEqual[NULL]}) {
+		/if (${Me.SpellReady[${healName}]} || (${FindItem[${healName}].InvSlot} && !${FindItem[${healName}].Timer})) {
+			/if (${healSlot.Equal[alt]} || ${healSlot.Find[Gem]}) {
+				/varset currTargID ${Target.ID}
+				/squelch /target myself
+				/delay 1s ${Target.ID}==${Me.ID}
+			}
+			/call MQ2Cast "${healName}" ${healSlot}
+			/if (${currTargID}) {
+				/squelch /target ${currTargID}
+				/delay 1s ${Target.ID}!=${Me.ID}
+			}
+		}
+	}
+/return
+
+
+Sub LoadSettings
+	/declare nArray				int outer
+	/declare inCombat			bool outer
+	/declare targID				int outer 0
+	
+	|  Load General
+	/declare minLvl				int outer 1
+	/declare maxLvl				int outer 85
+	/declare mobRadius		int outer 50
+	/declare meleeMobs		bool outer true
+	/declare minPctHPs		int outer 50
+	/declare minPctMana		int outer 50
+	/declare minPctHPsTo		int outer 80
+	/declare minPctManaTo		int outer 80
+	
+	/declare deathDelayStr	string outer 2m
+	/declare deathDleay		timer outer 0s
+	/declare lootCorpses	bool outer FALSE
+	| /declare circuitRestTime	string outer 5m
+	/declare circuitHadMobs		bool outer FALSE
+	/declare useCamp			bool outer TRUE
+	
+	/varset minLvl ${Ini[${iniName},General,MinLevel]}
+	/varset maxLvl ${Ini[${iniName},General,MaxLevel]}
+	/varset mobRadius ${Ini[${iniName},General,MobRadius]}
+	/varset meleeMobs ${Ini[${iniName},General,MeleeMobs]}
+	/varset minPctHPs ${Ini[${iniName},General,MinPctHPs]}
+	/varset minPctHPsTo ${Ini[${iniName},General,RestToHPs,${Math.Calc[${minPctHPs}+25]}]}
+	/varset minPctMana ${Ini[${iniName},General,MinPctMana]}
+	/varset minPctManaTo ${Ini[${iniName},General,RestToMana,${Math.Calc[${minPctMana}+25]}]}
+	/varset deathDelayStr ${Ini[${iniName},General,DeathDelay]}
+	/varset lootCorpses ${Ini[${iniName},General,LootCorpses,FALSE]}
+	/varset circuitRestTime ${Ini[${iniName},General,CircuitRestTime,5m]}
+	/varset useCamp ${Ini[${iniName},General,UseCamp,TRUE]}
+	/if (!${pNameSet}) {
+		/varset pathName ${Ini[${iniName},General,PathName,default]}
+		/if (${pathName.Equal[default]}) /varset pathName ${Zone.ShortName}
+	}
+	
+	/if (${minPctHPsTo}>100) /varset minPctHPsTo 100
+	/if (${minPctManaTo}>100) /varset minPctManaTo 100
+	
+	| Load Healing
+	/declare healName			string outer
+	/declare healSlot			string outer
+	/declare healPct			int outer
+	
+	/varset healName ${Ini[${iniName},Healing,HealName]}
+	/varset healSlot ${Ini[${iniName},Healing,HealSlot]}
+	/varset healPct ${Ini[${iniName},Healing,HealPct]}
+	
+	| Load Abilities
+	/declare abilityCount		int outer 0
+	/varset abilityCount ${Ini[${iniName},Abilities,Count]}
+	/declare abilities[${abilityCount}]				string outer
+	/declare abilitiesReuse[${abilityCount}]	string outer
+	
+	/if (${abilityCount}) {
+		/for nArray 1 to ${abilityCount}
+			/varset abilities[${nArray}] ${Ini[${iniName},Abilities,AbilityName${nArray}]}
+			/varset abilitiesReuse[${nArray}] ${Ini[${iniName},Abilities,AbilityReuse${nArray}]}
+			/declare abilitiesTimer${nArray}			timer outer 0s
+		/next nArray
+	}
+	
+	/declare spellCount		int outer 0
+	/varset spellCount ${Ini[${iniName},Spells,Count]}
+	/declare spells[${spellCount}]						string outer
+	/declare spellsReuse[${spellCount}]				string outer
+	/declare spellsSlot[${spellCount}]				string outer
+
+	/if (${spellCount}) {
+		/for nArray 1 to ${spellCount}
+			/varset spells[${nArray}] ${Ini[${iniName},Spells,SpellName${nArray}]}
+			/varset spellsReuse[${nArray}] ${Ini[${iniName},Spells,SpellReuse${nArray}]}
+			/varset spellsSlot[${nArray}] ${Ini[${iniName},Spells,SpellSlot${nArray}]}
+			/declare spellsTimer${nArray}					timer outer 0s
+		/next nArray
+	}
+	
+	/declare buffCount	int outer 0
+	/varset buffCount ${Ini[${iniName},SelfBuffs,Count,0]}
+	/declare buffs[${buffCount}]							string outer
+	/declare buffsText[${buffCount}]					string outer
+	/declare buffsSlot[${buffCount}]					string outer
+	/declare buffsCombat[${buffCount}]				bool outer
+	/declare buffCheckTimer										timer outer 0s
+	/if (${buffCount}) {
+		/for nArray 1 to ${buffCount}
+			/varset buffs[${nArray}] ${Ini[${iniName},SelfBuffs,SelfBuffName${nArray},NULL]}
+			/varset buffsText[${nArray}] ${Ini[${iniName},SelfBuffs,SelfBuffText${nArray},NULL]}
+			/varset buffsSlot[${nArray}] ${Ini[${iniName},SelfBuffs,SelfBuffSlot${nArray},gem1]}
+			/varset buffsCombat[${nArray}] ${Ini[${iniName},SelfBuffs,SelfBuffCombat${nArray},FALSE]}
+		/next nArray
+	}
+	
+	/declare killCount	int outer 0
+	/varset killCount ${Ini[${iniName},KillList,Count,0]}
+	/declare killList[${killCount}]
+	/squelch /alert clear 50
+	/if (${killCount}) {
+		/for nArray 1 to ${killCount}
+			/varset killList[${nArray}] npc ${Ini[${iniName},KillList,NPCName${nArray},NULL]}
+			/if (${killList[${nArray}].NotEqual[NULL]}) /squelch /alert add 50 ${killList[${nArray}]}
+		/next nArray
+	} else {
+		/squelch /alert add 50 npc
+	}
+	
+	/declare ignoreCount int outer 0
+	/varset ignoreCount ${Ini[${iniName},IgnoreList,Count,0]}
+	/declare ignoreList[${ignoreCount}]
+	/squelch /alert clear 51
+	/if (${ignoreCount}) {
+		/for nArray 1 to ${ignoreCount}
+			/varset ignoreList[${nArray}] npc ${Ini[${iniName},IgnoreList,NPCName${nArray},NULL]}
+			/if (${ignoreList[${nArray}].NotEqual[NULL]}) /squelch /alert add 51 ${ignoreList[${nArray}]}
+		/next nArray
+	}
+	/call LootInit
+	
+	/declare startZone			int outer ${Zone.ID}
+/return
+
+Sub ResetTimers
+	/if (${spellCount}) {
+		/for nArray 1 to ${spellCount}
+			/varset spellsTimer${nArray} 0s
+		/next nArray
+	}
+	/if (${abilityCount}) {
+		/for nArray 1 to ${abilityCount}
+			/varset abilitiesTimer${nArray} 0s
+		/next nArray
+	}
+/return
+
+Sub Rest
+	/declare statVariance					int local ${Math.Rand[5]}
+	/declare statVarDir						int local ${Math.Rand[100]}
+	/declare varianceUpdateTimer	timer local 0s
+	/if (${Me.PctHPs} >= ${If[${statVarDir}>=50,${Math.Calc[${minPctHPs}+${statVariance}]},${Math.Calc[${minPctHPs}-${statVariance}]}]}) {
+		/if ((${Me.Class.CanCast} && ${Me.PctMana} >= ${If[${statVarDir}>=50,${Math.Calc[${minPctMana}+${statVariance}]},${Math.Calc[${minPctMana}-${statVariance}]}]}) || !${Me.Class.CanCast})	/return
+	}
+	:restLoop
+		/if (!${varianceUpdateTimer}) {
+			/varset statVariance ${Math.Rand[5]}
+			/varset statVarDir ${Math.Rand[100]}
+			/varset varianceUpdateTimer ${Math.Rand[3]}s
+		}
+		/doevents
+		/if (${Me.PctHPs} >= ${If[${statVarDir}>=50,${Math.Calc[${minPctHPsTo}+${statVariance}]},${Math.Calc[${minPctHPsTo}-${statVariance}]}]}) {
+			/if ((${Me.Class.CanCast} && ${Me.PctMana} >= ${If[${statVarDir}>=50,${Math.Calc[${minPctManaTo}+${statVariance}]},${Math.Calc[${minPctManaTo}-${statVariance}]}]}) || !${Me.Class.CanCast})	/return
+		}
+		/if (${Target.ID} && ${Target.Type.Equal[npc]} && ${Target.LineOfSight} && ${Target.Distance} <= ${mobRadius}) {
+			/varset inCombat true
+			/return
+		}
+		/if (!${Me.Sitting}) /sit on
+	/goto :restLoop
+/return

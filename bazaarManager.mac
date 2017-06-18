@@ -1,0 +1,1284 @@
+| ========================================================================================================
+| 							 bazaarManager v1.14
+|     					Written By: Devestator
+| 
+| 
+| Description:
+|  This macro is intended to be a price matching / outbiding macro for use in the bazaar trader or buyer.
+| 
+| v1.14 Update Notes
+|  -Updated price undercutting / outbidding to use calcs on prices over max price (trader) or under min price (buyer)
+|    And set to min / max price only if the calc result is less than min price or greater than max price.
+|  -Corrected incorrect array when loading outbid settings preventing it from loading the settings correctly.
+| 
+| v1.13 Update Notes
+|  -Updated Type routine to work with shift keys
+| 
+| v1.12 Update Notes
+|  -Added hidden setting [General] RemoveCommas=TRUE (defaults to TRUE).  Will replace commas in item names
+|    with spaces instead.  This will make the item name in the INI be incorrect but will allow it to work
+|    with those items.
+|  -Added [BuyLines] BuyLineReaddCount=0, this is the maximum number of times it will add a buy line.
+|    will auto decrease the setting by 1 each time it adds the buy line.
+|  -Added [BuyLines] MinTimeBetweenItemReadds to control how fast it can readd items
+|  -Added support for combining multiple items from the same seller together to consider qty in a single search result.
+| 
+| v1.11 Update Notes
+|  -Added support for non MMOBugs compile (Note, items with a "," in there name will not work with other compiles)
+|  -Turned off debugMode by default.  Can turn it on using INI [General] DebugMode=TRUE (this setting is
+|    not created by default).
+|  -Added support for auto adding buy lines that don't exist (new INI section [BuyLines]
+|  -Added variables to auto enter trader / buyer mode if you are not in that mode already
+|  -Fixed clearing of price removing item from trader
+| 
+| v1.10 Update Notes
+|  -Added support for buyer mode
+|  -Corrected a few typos in echo statements
+| 
+| ========================================================================================================
+
+| TO DO
+| -Add a per item and global section that will allow quantity to be adjusted base don price, or maybe max price to adjust based on quantity?
+
+Sub main(string mode, string iniStr)
+	/declare meVersion	float outer 1.14
+	/declare iniName		string outer BAZAAR_${Me.CleanName}_${MacroQuest.Server}.ini
+	/declare setMode		string outer ${If[(!${Me.Trader} && !${Me.Buyer}) || ${Me.Trader},Trader,Buyer]}
+	/declare debugMode	bool outer TRUE
+
+	/mqlog clear
+	
+	/if (${Defined[mode]}) /varset setMode ${If[${mode.Equal[trader]} || ${mode.Equal[sell]} || ${mode.Equal[seller]} || ${mode.Equal[sale]},Trader,Buyer]}	
+	/if (${Defined[iniStr]}) /varset iniName BAZAAR_${iniStr}.ini
+	
+	/call EchoLog "Bazaar Manager v${meVersion} initializing."
+	/call LoadSettings
+	/call EchoLog "Initialization complete, starting in ${setMode} mode."
+	
+	:mainLoop
+		/if (!${checkTimer}) /call PriceCheck
+		/doevents
+	/goto :mainLoop
+/return
+
+Sub PriceCheck
+	/call PriceCheck_${setMode}
+	/varset checkTimer ${checkFrequency}
+/return
+
+Sub PriceCheck_Trader
+	/declare pcArray				int local 0
+	/declare checkedItems		string local
+	/declare itemLowestPrice string local 0
+	/declare myMinPrice			string local 0
+	/declare myMaxPrice			string local 0
+	/declare myCurrentPrice	string local 0
+	/declare myNewPrice			string local 0
+	/declare newPricePlat		string local
+	/declare myNewPriceP[4]	string local
+	/declare currPlat				string local 0
+	/declare currGold				string local 0
+	/declare currSilver			string local 0
+	/declare currCopper			string local 0
+	/declare itemDefaultUndercut	string local 0
+	/declare itemUndercutSettings[100,3]	string local
+	/declare itemUndercutCount		int local 0
+	/declare iuLoop					int local 0
+	/declare uSettingsVar		string local undercutSettings
+	/declare uSettingsCount	int local 0
+	/declare uSettingsMatch	bool local FALSE
+	/declare tString				string local
+	/declare tStringA				string local
+	/declare iNameLength		int local 0
+	/declare itemNoMinMax		bool local FALSE
+	/declare minPriceSet		bool local TRUE
+	/declare maxPriceSet		bool local TRUE
+	/declare originalName		string local
+	/declare priceCalc			string local
+	
+	/if (!${Window[BazaarWnd].Open}) {
+		/trader	
+		/delay 2s ${Window[BazaarWnd].Open}
+		/if (!${Window[BazaarWnd].Open}) {
+			/call EchoLog "\ayUnable to open trader window, aborting price check routine."
+			/return ABORT_NOWINDOW
+		}
+	}
+	
+	/call EchoLog "Starting Trader price check routine" TRUE
+	/declare tItemName			string local
+	/for pcArray 0 to 199
+		/doevents
+		/varset tItemName ${Window[BazaarWnd].Child[BZR_BazaarSlot${pcArray}].Tooltip}
+		/varset originalName ${tItemName}
+		
+		/if ((${INIVar.Equal[Ini]} || ${removeCommas}) && ${tItemName.Find[,]}) {
+			/call EchoLog ".....Removing all commas in the item name ${tItemName}.  This has to be done due to a limitation in the INI function, sorry for the inconvenience." TRUE
+			| Remove all commas
+			:removeComma
+			/if (${tItemName.Find[,]}) {
+				/varset tItemName ${tItemName.Left[${Math.Calc[${tItemName.Find[,]}-1]}]} ${tItemName.Right[${Math.Calc[${tItemName.Length}-${tItemName.Find[,]}]}]}
+				/goto :removeComma
+			}
+			/call EchoLog ".....Item name used: ${tItemName}" TRUE
+		}		
+		| If it's already been checked this routine no need to check again.
+		/call TraderItemTimer "${tItemName}"
+		/if (${tItemName.Length} && ${tItemName.NotEqual[NULL]} && !${checkedItems.Find[|${tItemName}|]} && ${Macro.Return.Equal[FALSE]}) {
+			/call EchoLog ".....Checking item ${tItemName}" TRUE
+
+			/if (${${INIVar}[${iniName},"${tItemName}",TraderMinPrice,NULL].Equal[NULL]}) {
+				/call GetINISetting ${iniName} "${tItemName}" TraderMinPrice NULL
+				/call GetINISetting ${iniName} "${tItemName}" TraderMaxPrice NULL
+				/call GetINISetting ${iniName} "${tItemName}" TraderMatchOnlyOverrideQty NULL 9999999
+				/call GetINISetting ${iniName} "${tItemName}" TraderMinimumQty NULL 0
+				/call GetINISetting ${iniName} "${tItemName}" DefaultUndercutAmount NULL
+				/call GetINISetting ${iniName} "${tItemName}" UndercutWithNoMinMax NULL
+				/call GetINISetting ${iniName} "${tItemName}" UndercutMinPrice1 NULL
+				/call GetINISetting ${iniName} "${tItemName}" UndercutMaxPrice1 NULL
+				/call GetINISetting ${iniName} "${tItemName}" UndercutCalc1 NULL
+				/call GetINISetting ${iniName} "${tItemName}" TraderIgnore1 NULL
+				/call GetINISetting ${iniName} "${tItemName}" TraderMatchOnly1 NULL				
+			}
+
+			| /call GetINISetting ${iniName} "${tItemName}" TraderMinPrice NULL
+			/varset myMinPrice ${${INIVar}[${iniName},"${tItemName}",TraderMinPrice,NULL]}
+			| /call GetINISetting ${iniName} "${tItemName}" TraderMaxPrice NULL
+			/varset myMaxPrice ${${INIVar}[${iniName},"${tItemName}",TraderMaxPrice,NULL]}
+			| /call GetINISetting ${iniName} "${tItemName}" UndercutWithNoMinMax NULL ${undercutNoMinMax} 
+			/varset itemNoMinMax ${${INIVar}[${iniName},"${tItemName}",UndercutWithNoMinMax,${undercutNoMinMax}]}
+			| /if (${itemNoMinMax}) /varset itemNoMinMax ${undercutNoMinMax}
+			
+			/if (${itemNoMinMax} || ${undercutNoMinMax}) {
+				/if (${myMinPrice.Equal[NULL]}) {
+					/varset myMinPrice 1
+					/varset minPriceSet FALSE
+				}
+				/if (${myMaxPrice.Equal[NULL]}) {
+					/varset myMaxPrice 9999999999999
+					/varset maxPriceSet FALSE
+				}
+			}
+			/if (${myMinPrice.NotEqual[NULL]} && ${myMaxPrice.NotEqual[NULL]}) {
+				/if (!${maxPriceSet} || !${minPriceSet}) /call EchoLog "Min or Max price is not set but undercut with no min max for this item is set to true | Global UndercutWithNoMinMax: ${undercutNoMinMax} Item UndercutWithNoMinMax: ${itemNoMinMax}" TRUE
+				/call PerformSearch "${originalName}"
+				/call EchoLog "..........Found ${SearchResultsCount} search results" TRUE
+				/if (!${SearchResultsCount} && !${maxPriceSet}) {
+					/call EchoLog "..........No search results found and max price is not set, unable to modify price for this item." TRUE
+					/goto :abortItem
+				}
+				/call GetLowestPrice "${tItemName}" "${originalName}"
+				/varset itemLowestPrice ${Macro.Return}
+
+				/notify BazaarWnd BZR_BazaarSlot${pcArray} leftmouseup
+				/delay 3
+				
+				/varset currPlat ${Window[BazaarWnd].Child[BZW_Money0].Text}
+				/varset currGold ${Window[BazaarWnd].Child[BZW_Money1].Text}
+				/varset currSilver ${Window[BazaarWnd].Child[BZW_Money2].Text}
+				/varset currCopper ${Window[BazaarWnd].Child[BZW_Money3].Text}
+				/call ToCopper ${currPlat} ${currGold} ${currSilver} ${currCopper}
+				/varset myCurrentPrice ${Macro.Return}
+				/call EchoLog "..........Lowest price: ${itemLowestPrice} copper, Seller: ${SearchResults[${lowestPriceID},7]}, Qty: ${SearchResults[${lowestPriceID},2]}, my current price ${myCurrentPrice}" TRUE
+				
+				| Load item specific undercut settings (these will override defaults)
+				/call GetINISetting ${iniName} "${tItemName}" DefaultUndercutAmount NULL ${defaultUndercutAmount} FALSE
+				/varset itemDefaultUndercut ${Macro.Return}
+				/call GetINIArrayCount ${iniName} "${tItemName}" UnderCutMinPrice NULL
+				/varset itemUndercutCount ${Macro.Return}
+				/if (${itemUndercutCount}) {
+					/for iuLoop 1 to ${itemUndercutCount}
+						/varset itemUndercutSettings[${iuLoop},1] ${${INIVar}[${iniName},"${tItemName}",UnderCutMinPrice${iuLoop},NULL]}
+						/varset itemUndercutSettings[${iuLoop},2] ${${INIVar}[${iniName},"${tItemName}",UnderCutMaxPrice${iuLoop},NULL]}
+						/varset itemUndercutSettings[${iuLoop},3] ${${INIVar}[${iniName},"${tItemName}",UnderCutCalc${iuLoop},NULL]}
+					/next iuLoop
+				}
+				/call GetINISetting ${iniName} "${tItemName}" UnderCutMinPrice${Math.Calc[${itemUndercutCount}+1].Int} NULL
+				/call GetINISetting ${iniName} "${tItemName}" UnderCutMaxPrice${Math.Calc[${itemUndercutCount}+1].Int} NULL
+				/call GetINISetting ${iniName} "${tItemName}" UnderCutCalc${Math.Calc[${itemUndercutCount}+1].Int} NULL		
+				
+				/varset myNewPrice ${myCurrentPrice}
+				| /if (${itemLowestPrice} > ${myMaxPrice}) {
+				| 	/varset myNewPrice ${myMaxPrice}
+				| 	/call EchoLog "..........Lowest price is greater than my max price, setting price to max price of ${myMaxPrice} copper" TRUE
+				| } else 
+				/if (${itemLowestPrice} <= ${myMinPrice}) {
+					/varset myNewPrice ${myMinPrice}
+					/call EchoLog "..........Lowest price is lower than my min price, setting price to min price of ${myMinPrice} copper" TRUE
+				} else {
+					| Algorithim to compute new price based on INI settings
+					/if (${itemUndercutCount}) {
+						/varset uSettingsVar itemUndercutSettings
+						/varset uSettingsCount ${itemUndercutCount}
+					} else /if (${undercutCount}) {
+						/varset uSettingsVar undercutSettings
+						/varset uSettingsCount ${undercutCount}
+					} else {
+						/varset uSettingsVar NULL
+					}
+					/varset uSettingsMatch FALSE
+					/if (${uSettingsVar.NotEqual[NULL]}) {
+						/for iuLoop 1 to ${uSettingsCount}
+							/if (${itemLowestPrice} <= ${${uSettingsVar}[${iuLoop},2]} && ${itemLowestPrice} >= ${${uSettingsVar}[${iuLoop},1]}) {
+								/varset uSettingsMatch TRUE
+								/varset priceCalc ${${uSettingsVar}[${iuLoop},3]}
+								:replaceCheck
+								/if (${priceCalc.Find[PRICE]}) {
+									/varset priceCalc ${priceCalc.Replace[PRICE,${itemLowestPrice}]}
+									/if (${priceCalc.Find[PRICE]}) /goto :replaceCheck
+								} else {
+									/if (${priceCalc.Left[1].NotEqual[*]} && ${priceCalc.Left[1].NotEqual[/]} && ${priceCalc.Left[1].NotEqual[-]} && ${priceCalc.Left[1].NotEqual[+]}) {
+										/varset priceCalc -${priceCalc}
+									}
+									/varset priceCalc ${itemLowestPrice}${priceCalc}
+								}
+								/call EchoLog "..........Undercutting based on algorithim: ${priceCalc}" TRUE
+								/varset myNewPrice ${Math.Calc[${priceCalc}]}
+							}
+						/if (!${uSettingsMatch}) /next iuLoop
+					}
+					/if (!${uSettingsMatch}) {
+						/varset myNewPrice ${Math.Calc[${itemLowestPrice} - ${itemDefaultUndercut}]}
+					}
+					/if (${myNewPrice} < ${myMinPrice}) {
+						/call EchoLog "..........Calc results in a price lower than my min price, using that price instead." TRUE
+						/varset myNewPrice ${myMinPrice}
+					} else /if (${myNewPrice} > ${myMaxPrice}) {
+						/call EchoLog "..........Calc results in a price higher than my max price, using that price instead." TRUE
+						/varset myNewPrice ${myMaxPrice}
+					}
+				}
+				
+				/varset myCurrentPrice ${Math.Calc[${myCurrentPrice}].Int}
+				/varset myNewPrice ${Math.Calc[${myNewPrice}].Int}
+				/if (${myNewPrice.NotEqual[${myCurrentPrice}]}) {
+					/varset myNewPriceP[1] ${If[${myNewPrice.Length} > 3,${myNewPrice.Left[${Math.Calc[${myNewPrice.Length}-3]}]},0]}
+					/varset myNewPriceP[2] ${If[${myNewPrice.Length} > 2,${myNewPrice.Mid[${Math.Calc[${myNewPrice.Length} - 2]},1]},0]}
+					/varset myNewPriceP[3] ${If[${myNewPrice.Length} > 1,${myNewPrice.Mid[${Math.Calc[${myNewPrice.Length} - 1]},1]},0]}
+					/varset myNewPriceP[4] ${If[${myNewPrice.Length},${myNewPrice.Right[1]},0]}					
+					/call EchoLog "..........Updating price to ${myNewPriceP[1]} Plat ${myNewPriceP[2]} Gold ${myNewPriceP[3]} Silver ${myNewPriceP[4]} Copper (${myNewPrice} total copper)" TRUE
+					
+					| Need to set the new price, gui interaction to set price
+					| /notify BazaarWnd BZW_Clear_Button leftmouseup (don't use clear button removes it from trader mode)
+					/delay 3
+					/for iuLoop 1 to 4
+						/notify BazaarWnd BZW_Money${Math.Calc[${iuLoop}-1].Int} leftmouseup
+						/delay 1s ${Window[QuantityWnd].Open}
+						/if (${Window[QuantityWnd].Open}) {
+							/call ClearText QuantityWnd QTYW_SliderInput
+							/call Type "${myNewPriceP[${iuLoop}]}"
+						} else {
+							| Failed to open the window to set the price, abort
+							/call EchoLog "..........Could not open the quantity window to set the price, aborting." TRUE
+							/goto :abortItem
+						}
+						/notify QuantityWnd QTYW_Accept_Button leftmouseup
+						/delay 2s !${Window[QuantityWnd].Open}
+					/next iuLoop
+					/notify BazaarWnd BZW_SetPrice_Button leftmouseup
+					/delay 3
+					/call EchoLog "..........New price has been set, will not update the price on this item again for ${timeBetweenPrice}" TRUE
+					/call TraderItemTimer "${tItemName}" ${timeBetweenPrice}
+				}
+				/varset checkedItems ${checkedItems}|${tItemName}|
+				/delay ${timeBetween}
+			} else {
+				/call EchoLog "..........Either min or max price not set for ${tItemName}, ignoring this item." TRUE
+			}
+		}
+		:abortItem
+	/next pcArray
+	/if (${autoEnableTrader} && !${Me.Trader}) {
+		| Press ui buttons to enable trader
+		/nomodkey /notify BazaarWnd BZW_Start_Button leftmouseup
+	}
+/return
+
+Sub PriceCheck_Buyer
+	/declare pcArray				int local 0
+	/declare pcArrayB				int local 0
+	/declare checkedItems		string local
+	/declare itemHighestPrice string local 0
+	/declare myMinPrice			string local 0
+	/declare myMaxPrice			string local 0
+	/declare myCurrentPrice	string local 0
+	/declare myNewPrice			string local 0
+	/declare newPricePlat		string local
+	/declare myNewPriceP[4]	string local
+	/declare cLabel[4]			string local
+	/declare currPlat				string local 0
+	/declare currGold				string local 0
+	/declare currSilver			string local 0
+	/declare currCopper			string local 0
+	/declare itemDefaultOutbid	string local 0
+	/declare itemOutbidSettings[100,3]	string local
+	/declare itemOutbidCount		int local 0
+	/declare iuLoop					int local 0
+	/declare uSettingsVar		string local outbidSettings
+	/declare uSettingsCount	int local 0
+	/declare uSettingsMatch	bool local FALSE
+	/declare tString				string local
+	/declare tStringA				string local
+	/declare iNameLength		int local 0
+	/declare itemNoMinMax		bool local FALSE
+	/declare minPriceSet		bool local TRUE
+	/declare maxPriceSet		bool local TRUE
+	/declare originalName		string local
+	/declare priceCalc			string local
+	
+	/varset cLabel[1] Plat
+	/varset cLabel[2] Gold
+	/varset cLabel[3] Silver
+	/varset cLabel[4] Copper
+	
+	/if (!${Window[BarterWnd].Open}) {
+		/buyer
+		/delay 2s ${Window[BarterWnd].Open}
+		/if (!${Window[BarterWnd].Open}) {
+			/call EchoLog "\ayUnable to open buyer window, aborting price check routine."
+			/return ABORT_NOWINDOW
+		}
+		/delay 1s
+	}
+	
+	/call EchoLog "Starting Buyer price check routine" TRUE
+	
+	/if (${buyLinesCount}) {
+		/call EchoLog ".....Checking for buy lines that do not exist" TRUE
+		/for pcArray 1 to ${buyLinesCount}
+			/varset uSettingsMatch TRUE
+			/if (!${buyLines[${pcArray},1].Find[,]}) {
+				/if (!${Window[BarterWnd].Child[BTR_BuyLineList].List[=${buyLines[${pcArray},1]},3]}) /varset uSettingsMatch FALSE
+			} else {
+				| have to loop through since the comma will break the search function
+				/for pcArrayB 1 to ${Window[BarterWnd].Child[BTR_BuyLineList]}
+					/if (${Window[BarterWnd].Child[BTR_BuyLineList].List[${pcArrayB},3].Equal[${buyLines[${pcArray},1]}]}) /varset uSettingsMatch TRUE
+				/if (!${uSettingsMatch}) /next pcArrayB
+			}	
+			/if (!${uSettingsMatch}) {
+				/call TraderItemTimer "${buyLines[${pcArray},1]}BUYLINE"
+				/if (${Macro.Return.Equal[FALSE]}) {
+					| Item does not exist, need to add it
+					/call GetINISetting ${iniName} BuyLines BuyLineReaddCount${pcArray} buyLines[${pcArray},4] 0
+					/if (${Math.Calc[${buyLines[${pcArray},4]}].Int}<=0) {
+						/call EchoLog "..........Item ${buyLines[${pcArray},1]} missing from buy lines but there are no readds left allowed, skipping item." TRUE
+						/goto :abortItemAdd
+					}
+	
+					/varset myNewPriceP[1] ${If[${buyLines[${pcArray},3].Length} > 3,${buyLines[${pcArray},3].Left[${Math.Calc[${buyLines[${pcArray},3].Length}-3]}]},0]}
+					/varset myNewPriceP[2] ${If[${buyLines[${pcArray},3].Length} > 2,${buyLines[${pcArray},3].Mid[${Math.Calc[${buyLines[${pcArray},3].Length} - 2]},1]},0]}
+					/varset myNewPriceP[3] ${If[${buyLines[${pcArray},3].Length} > 1,${buyLines[${pcArray},3].Mid[${Math.Calc[${buyLines[${pcArray},3].Length} - 1]},1]},0]}
+					/varset myNewPriceP[4] ${If[${buyLines[${pcArray},3].Length},${buyLines[${pcArray},3].Right[1]},0]}
+					/call EchoLog "..........Item ${buyLines[${pcArray},1]} missing from buy lines, adding at initial price of ${myNewPriceP[1]} Plat ${myNewPriceP[2]} Gold ${myNewPriceP[3]} Silver ${myNewPriceP[4]} Copper (${myNewPrice} total copper)" TRUE
+					
+					/call ClearText BarterWnd BTR_ItemSearchEdit
+					/call Type "${buyLines[${pcArray},1]}"
+					/delay 5s ${Window[BarterWnd].Child[BTR_ItemSearchButton].Enabled}
+					/if (!${Window[BarterWnd].Child[BTR_ItemSearchButton].Enabled}) {
+						/call EchoLog "..........Unable to search for item, aborting." TRUE
+						/goto :abortItemAdd
+					}
+					/nomodkey /notify BarterWnd BTR_ItemSearchButton leftmouseup
+					:searchItemsPopulate
+						/varset iuLoop ${Window[BarterWnd].Child[BTR_ItemSearchList].Items}
+						/delay 1s ${Window[BarterWnd].Child[BTR_ItemSearchList].Items}!=${iuLoop}
+					/if (${Window[BarterWnd].Child[BTR_ItemSearchList].Items}!=${iuLoop}) /goto :searchItemsPopulate
+					/if (${Window[BarterWnd].Child[BTR_ItemSearchList].Items}) {
+						/varset uSettingsMatch FALSE
+						/for iuLoop 1 to ${Window[BarterWnd].Child[BTR_ItemSearchList].Items}
+							/if (${Window[BarterWnd].Child[BTR_ItemSearchList].List[${iuLoop},2].Equal[${buyLines[${pcArray},1]}]}) {
+								/varset uSettingsMatch TRUE
+								/nomodkey /notify BarterWnd BTR_ItemSearchList listselect ${iuLoop}
+							} else {
+								/next iuLoop
+							}
+							/if (${uSettingsMatch}) {
+								/for iuLoop 1 to 4
+									/notify BarterWnd BTR_Compensation${cLabel[${iuLoop}]} leftmouseup
+									/delay 1s ${Window[QuantityWnd].Open}
+									/if (${Window[QuantityWnd].Open}) {
+										/call ClearText QuantityWnd QTYW_SliderInput
+										/nomodkey /notify QuantityWnd QTYW_SliderInput leftmouseup
+										/call Type "${myNewPriceP[${iuLoop}]}"
+									} else {
+										| Failed to open the window to set the price, abort
+										/call EchoLog "..........Could not open the quantity window to set the price, aborting." TRUE
+										/goto :abortItemAdd
+									}
+									/nomodkey /notify QuantityWnd QTYW_Accept_Button leftmouseup
+									/delay 2s !${Window[QuantityWnd].Open}
+								/next iuLoop
+								| /call ClearText BarterWnd BTR_CountEdit
+								| Can't clear this field because it stays 0 for some annoyingly stupid reason
+								/nomodkey /notify BarterWnd BTR_CountEdit leftmouseup
+								/call Type "${buyLines[${pcArray},2]}"
+								/nomodkey /notify BarterWnd BTR_BuyLineAddButton leftmouseup
+								/delay 3
+								/varset buyLines[${pcArray},4] ${Math.Calc[${buyLines[${pcArray},4]} - 1].Int}
+								/ini ${iniName} BuyLines BuyLineReaddCount${pcArray} ${buyLines[${pcArray},4]}
+								/call TraderItemTimer "${buyLines[${pcArray},1]}BUYLINE" ${minTimeReadd}
+								/call EchoLog "..........Added missing buy line item ${buyLines[${pcArray},1]}" TRUE
+							} else {
+								/call EchoLog "..........Unable to find the item ${buyLines[${pcArray},1]} in the items to buy list" TRUE
+							}
+					} else {
+						/call EchoLog "..........Unable to find any items matching ${buyLines[${pcArray},1]}" TRUE
+					}
+				}
+			}
+			:abortItemAdd
+		/next pcArray
+	}
+	/declare tItemName			string local
+	/if (${Window[BarterWnd].Child[BTR_BuyLineList].Items}) {	
+		/for pcArray 1 to ${Window[BarterWnd].Child[BTR_BuyLineList].Items}
+			/doevents
+			/varset tItemName ${Window[BarterWnd].Child[BTR_BuyLineList].List[${pcArray},3]}
+			/varset originalName ${tItemName}
+
+			/if ((${INIVar.Equal[Ini]} || ${removeCommas}) && ${tItemName.Find[,]}) {
+				/call EchoLog ".....Removing all commas in the item name ${tItemName}.  This has to be done due to a limitation in the INI function, sorry for the inconvenience." TRUE
+				| Remove all commas
+				:removeComma
+				/if (${tItemName.Find[,]}) {
+					/varset tItemName ${tItemName.Left[${Math.Calc[${tItemName.Find[,]}-1]}]} ${tItemName.Right[${Math.Calc[${tItemName.Length}-${tItemName.Find[,]}]}]}
+					/goto :removeComma
+				}
+				/call EchoLog ".....Item name used: ${tItemName}" TRUE
+			}					
+			| If it's already been checked this routine no need to check again.
+			/call TraderItemTimer "${tItemName}"
+			/if (${tItemName.Length} && ${tItemName.NotEqual[NULL]} && !${checkItems.Find[|${tItemName}|]} && ${Macro.Return.Equal[FALSE]}) {
+				/call EchoLog ".....Checking item ${tItemName}" TRUE
+				/if (${${INIVar}[${iniName},"${tItemName}",BuyerMinPrice,NULL].Equal[NULL]}) {
+					| Item settings don't exist, add initial settings for it.
+					/call GetINISetting ${iniName} "${tItemName}" BuyerMinPrice NULL
+					/call GetINISetting ${iniName} "${tItemName}" BuyerMaxPrice NULL
+					/call GetINISetting ${iniName} "${tItemName}" BuyerMatchOnlyOverrideQty NULL 9999999
+					/call GetINISetting ${iniName} "${tItemName}" BuyerMinimumQty NULL 0
+					/call GetINISetting ${iniName} "${tItemName}" DefaultOutbidAmount NULL
+					/call GetINISetting ${iniName} "${tItemName}" OutbidWithNoMinMax NULL
+					/call GetINISetting ${iniName} "${tItemName}" OutbidMinPrice1 NULL
+					/call GetINISetting ${iniName} "${tItemName}" OutbidMaxPrice1 NULL
+					/call GetINISetting ${iniName} "${tItemName}" OutbidCalc1 NULL
+					/call GetINISetting ${iniName} "${tItemName}" BuyerIgnore1 NULL
+					/call GetINISetting ${iniName} "${tItemName}" BuyerMatchOnly1 NULL					
+				}
+
+				/varset myMinPrice ${${INIVar}[${iniName},"${tItemName}",BuyerMinPrice,NULL]}
+				/varset myMaxPrice ${${INIVar}[${iniName},"${tItemName}",BuyerMaxPrice,NULL]}
+				/varset itemNoMinMax ${${INIVar}[${iniName},"${tItemName}",OutbidWithNoMinMax,${outbidNoMinMax}]}
+	
+
+				/if (${itemNoMinMax}) {
+					/if (${myMinPrice.Equal[NULL]}) {
+						/varset myMinPrice 1
+						/varset minPriceSet FALSE
+					}
+					/if (${myMaxPrice.Equal[NULL]}) {
+						/varset myMaxPrice 999999999999
+						/varset maxPriceSet FALSE
+					}
+				}	
+				/if (${myMinPrice.NotEqual[NULL]} && ${myMaxPrice.NotEqual[NULL]}) {
+					/if (!${maxPriceSet} || !${minPriceSet}) /call EchoLog "Min or Max price is not set but outbid with no min max for this item is set to true | Global OutbidWithNoMinMax: ${outbidNoMinMax} Item OutbidWithNoMinMax: ${itemNoMinMax}" TRUE
+					/call PerformSearchBuyer "${originalName}"
+					/call EchoLog "..........Found ${SearchResultsCount} search results" TRUE
+					/if (!${SearchResultsCount} && !${minPriceSet}) {
+						/call EchoLog "..........No search results found and min price is not set, unable to modify price for this item." TRUE
+						/goto :abortItemB
+					}
+					/call GetHighestPrice "${tItemName}" "${originalName}"
+					/varset itemHighestPrice ${Macro.Return}
+					
+					| Need to click the buy line
+					/nomodkey /notify BarterWnd BTR_BuyLineList listselect ${pcArray}
+					/delay 5
+					
+					/varset currPlat ${Window[BarterWnd].Child[BTR_CompensationPlat].Text}
+					/varset currGold ${Window[BarterWnd].Child[BTR_CompensationGold].Text}
+					/varset currSilver ${Window[BarterWnd].Child[BTR_CompensationSilver].Text}
+					/varset currCopper ${Window[BarterWnd].Child[BTR_CompensationCopper].Text}
+					/call ToCopper ${currPlat} ${currGold} ${currSilver} ${currCopper}
+					/varset myCurrentPrice ${Macro.Return}
+					/call EchoLog "..........Highest price: ${itemHighestPrice} copper, Seller: ${SearchResults[${highestPriceID},7]}, Qty: ${SearchResults[${highestPriceID},2]}, my current price ${myCurrentPrice}" TRUE
+					
+					| Load item specific undercut settings (these will override defaults)
+					/call GetINISetting ${iniName} "${tItemName}" DefaultOutbidAmount NULL ${defaultOutbidAmount} FALSE
+					/varset itemDefaultOutbid ${Macro.Return}
+					/call GetINIArrayCount ${iniName} "${tItemName}" OutbidMinPrice NULL
+					/varset itemOutbidCount ${Macro.Return}
+					/if (${itemOutbidCount}) {
+						/for iuLoop 1 to ${itemOutbidCount}
+							/varset itemOutbidSettings[${iuLoop},1] ${${INIVar}[${iniName},"${tItemName}",OutbidMinPrice${iuLoop},NULL]}
+							/varset itemOutbidSettings[${iuLoop},2] ${${INIVar}[${iniName},"${tItemName}",OutbidMaxPrice${iuLoop},NULL]}
+							/varset itemOutbidSettings[${iuLoop},3] ${${INIVar}[${iniName},"${tItemName}",OutbidCalc${iuLoop},NULL]}
+						/next iuLoop
+					}
+					/call GetINISetting ${iniName} "${tItemName}" OutbidMinPrice${Math.Calc[${itemOutbidCount}+1].Int} NULL
+					/call GetINISetting ${iniName} "${tItemName}" OutbidMaxPrice${Math.Calc[${itemOutbidCount}+1].Int} NULL
+					/call GetINISetting ${iniName} "${tItemName}" OutbidCalc${Math.Calc[${itemOutbidCount}+1].Int} NULL		
+					
+					/varset myNewPrice ${myCurrentPrice}
+					/if (${itemHighestPrice} >= ${myMaxPrice}) {
+						/varset myNewPrice ${myMaxPrice}
+						/call EchoLog "..........Highest price is greater than or the same as my max price, setting price to max price of ${myMaxPrice} copper" TRUE
+					| } else /if (${itemHighestPrice} < ${myMinPrice}) {
+					| 	/varset myNewPrice ${myMinPrice}
+					| 	/call EchoLog "..........Highest price is lower than my min price, setting price to min price of ${myMinPrice} copper" TRUE
+					} else {
+						| Algorithim to compute new price based on INI settings
+						/if (${itemOutbidCount}) {
+							/varset uSettingsVar itemOutbidSettings
+							/varset uSettingsCount ${itemOutbidCount}
+						} else /if (${outbidCount}) {
+							/varset uSettingsVar outbidSettings
+							/varset uSettingsCount ${outbidCount}
+						} else {
+							/varset uSettingsVar NULL
+						}
+						/varset uSettingsMatch FALSE
+						/if (${uSettingsVar.NotEqual[NULL]}) {
+							/for iuLoop 1 to ${uSettingsCount}
+								/if (${itemHighestPrice} <= ${${uSettingsVar}[${iuLoop},2]} && ${itemHighestPrice} >= ${${uSettingsVar}[${iuLoop},1]}) {
+									/varset uSettingsMatch TRUE
+									
+									/varset priceCalc ${${uSettingsVar}[${iuLoop},3]}
+									:replaceCheckB
+									/if (${priceCalc.Find[PRICE]}) {
+										/varset priceCalc ${priceCalc.Replace[PRICE,${itemHighestPrice}]}
+										/if (${priceCalc.Find[PRICE]}) /goto :replaceCheckB
+									} else {
+										/if (${priceCalc.Left[1].NotEqual[*]} && ${priceCalc.Left[1].NotEqual[/]} && ${priceCalc.Left[1].NotEqual[-]} && ${priceCalc.Left[1].NotEqual[+]}) {
+											/varset priceCalc +${priceCalc}
+										}
+										/varset priceCalc ${itemLowestPrice}${priceCalc}
+									}
+									/call EchoLog "..........Outbiding based on algorithim: ${priceCalc}" TRUE
+									/varset myNewPrice ${Math.Calc[${priceCalc}]}									
+								}
+							/if (!${uSettingsMatch}) /next iuLoop
+						}
+						/if (!${uSettingsMatch}) {
+							/varset myNewPrice ${Math.Calc[${itemHighestPrice} + ${itemDefaultOutbid}]}
+						}
+						/if (${myNewPrice} < ${myMinPrice}) {
+							/call EchoLog "..........Calc results in a price lower than my min price, using that price instead." TRUE
+							/varset myNewPrice ${myMinPrice}
+						} else /if (${myNewPrice} > ${myMaxPrice}) {
+							/call EchoLog "..........Calc results in a price higher than my max price, using that price instead." TRUE
+							/varset myNewPrice ${myMaxPrice}
+						}						
+					}
+					
+					/varset myCurrentPrice ${Math.Calc[${myCurrentPrice}].Int}
+					/varset myNewPrice ${Math.Calc[${myNewPrice}].Int}					
+					/if (${myNewPrice.NotEqual[${myCurrentPrice}]}) {
+						/varset myNewPriceP[1] ${If[${myNewPrice.Length} > 3,${myNewPrice.Left[${Math.Calc[${myNewPrice.Length}-3]}]},0]}
+						/varset myNewPriceP[2] ${If[${myNewPrice.Length} > 2,${myNewPrice.Mid[${Math.Calc[${myNewPrice.Length} - 2]},1]},0]}
+						/varset myNewPriceP[3] ${If[${myNewPrice.Length} > 1,${myNewPrice.Mid[${Math.Calc[${myNewPrice.Length} - 1]},1]},0]}
+						/varset myNewPriceP[4] ${If[${myNewPrice.Length},${myNewPrice.Right[1]},0]}
+						/call EchoLog "..........Updating price to ${myNewPriceP[1]} Plat ${myNewPriceP[2]} Gold ${myNewPriceP[3]} Silver ${myNewPriceP[4]} Copper (${myNewPrice} total copper)" TRUE
+						
+						/for pcArrayB ${pcArray} to ${Window[BarterWnd].Child[BTR_BuyLineList].Items}
+							| Need to set the new price, gui interaction to set price
+							| Need to also loop through the rest of the buy line list and set any other items of the same name to this price
+							/if (${Window[BarterWnd].Child[BTR_BuyLineList].List[${pcArrayB},3].Equal[${tItemName}]}) {
+								/nomodkey /notify BarterWnd BTR_BuyLineList listselect ${pcArrayB}
+								/delay 3
+								
+								/for iuLoop 1 to 4
+									/notify BarterWnd BTR_Compensation${cLabel[${iuLoop}]} leftmouseup
+									/delay 1s ${Window[QuantityWnd].Open}
+									/if (${Window[QuantityWnd].Open}) {
+										/call ClearText QuantityWnd QTYW_SliderInput
+										/nomodkey /notify QuantityWnd QTYW_SliderInput leftmouseup
+										/call Type "${myNewPriceP[${iuLoop}]}"
+									} else {
+										| Failed to open the window to set the price, abort
+										/call EchoLog "..........Could not open the quantity window to set the price, aborting." TRUE
+										/goto :abortItemB
+									}
+									/nomodkey /notify QuantityWnd QTYW_Accept_Button leftmouseup
+									/delay 2s !${Window[QuantityWnd].Open}
+								/next iuLoop
+								/nomodkey /notify BarterWnd BTR_BuyLineModifyButton leftmouseup
+								/delay 3
+							}
+						/next pcArrayB
+						/call EchoLog "..........New price has been set, will not update the price on this buy line again for ${timeBetweenPrice}" TRUE
+						/call TraderItemTimer "${tItemName}" ${timeBetweenPrice}
+					}
+					/varset checkedItems ${checkedItems}|${tItemName}|
+					/delay ${timeBetween}
+				} else {
+					/call EchoLog "..........Either min or max price not set for ${tItemName}, ignoring this item." TRUE
+				}
+			}
+			:abortItemB
+		/next pcArray
+	}
+	/if (${autoEnableBuyer} && !${Me.Buyer}) {
+		| Press the UI stuff to enable buyer mode
+		/nomodkey /notify BarterWnd BTR_StartStopButton leftmouseup
+	}
+/return
+
+Sub GetLowestPrice(string itemName, string originalName)
+	/declare lArray					int local 0
+	/declare lowestPrice		string local 9999999999999
+	/declare iIgnoreCount		int local 0
+	/declare igLoop					int local 0
+	/declare matchOnlyCount	int local 0
+	/declare moLoop					int local 0
+	/declare matchFound			bool local FALSE
+	/declare thisPrice			string local 9999999999999
+	| Load settings for item from INI
+	/for lArray 1 to ${SearchResultsCount}
+		/varset iIgnoreCount 0
+		/varset matchOnlyCount 0
+		/varset matchFound FALSE
+		/varset thisPrice 9999999999999
+		/if (${SearchResults[${lArray},1].Equal[${originalName}]} && ${SearchResults[${lArray},7].NotEqual[${Me.CleanName}]}) {
+			/call GetINIArrayCount ${iniName} "${itemName}" TraderMatchOnly NULL
+			/varset matchOnlyCount ${Macro.Return}
+			/if (${matchOnlyCount}) {
+				/for moLoop 1 to ${matchOnlyCount}
+					/call GetINISetting ${iniName} "${itemName}" TraderMatchOnly${moLoop}
+					/if (${Macro.Return.Equal[${SearchResults[${lArray},7]}]}) /varset matchFound TRUE
+				/if (!${matchFound}) /next moLoop
+			}
+			/call GetINISetting ${iniName} "${itemName}" TraderMatchOnly${Math.Calc[${matchOnlyCount}+1].Int} NULL
+			
+			/if (!${matchFound}) {
+				/call CheckGlobalIgnore ${SearchResults[${lArray},7]}
+				/if (${Macro.Return.Equal[FALSE]}) {
+					/varset matchFound TRUE
+					/call GetINIArrayCount ${iniName} "${itemName}" TraderIgnore NULL
+					/varset iIgnoreCount ${Macro.Return}
+					/if (${iIgnoreCount}) {
+						/for igLoop 1 to ${iIgnoreCount}
+							/call GetINISetting ${iniName} "${itemName}" TraderIgnore${igLoop}
+							/if (${Macro.Return.Equal[${SearchResults[${lArray},7]}]}) /varset matchFound FALSE
+						/if (${matchFound}) /next igLoop
+					}
+					/call GetINISetting ${iniName} "${itemName}" TraderIgnore${Math.Calc[${iIgnoreCount}+1].Int} NULL
+				}
+				/if (${matchFound}) {
+					/if (${matchOnlyCount}) {
+						/call GetINISetting ${iniName} "${itemName}" TraderMatchOnlyOverrideQty
+					} else {
+						/call GetINISetting ${iniName} "${itemName}" TraderMinimumQty
+					}
+					/if (${SearchResults[${lArray},2]}<${Macro.Return}) /varset matchFound FALSE
+				}
+			}
+			/if (${matchFound}) {
+				/call ToCopper ${SearchResults[${lArray},3]} ${SearchResults[${lArray},4]} ${SearchResults[${lArray},5]} ${SearchResults[${lArray},6]}
+				/varset thisPrice ${Macro.Return}
+				/if (${thisPrice} < ${lowestPrice}) {
+					/varset lowestPrice ${thisPrice}
+					/varset lowestPriceID ${lArray}
+				}
+			}
+		}
+	/next lArray
+/return ${lowestPrice}
+
+Sub GetHighestPrice(string itemName, string originalName)
+	/declare lArray					int local 0
+	/declare highestPrice		string local 0
+	/declare iIgnoreCount		int local 0
+	/declare igLoop					int local 0
+	/declare matchOnlyCount	int local 0
+	/declare moLoop					int local 0
+	/declare matchFound			bool local FALSE
+	/declare thisPrice			string local 0
+	/declare minQty					string local
+	
+	| Load settings for item from INI
+	/for lArray 1 to ${SearchResultsCount}
+		/varset iIgnoreCount 0
+		/varset matchOnlyCount 0
+		/varset matchFound FALSE
+		/varset thisPrice 0
+		/if (${SearchResults[${lArray},1].Equal[${originalName}]} && ${SearchResults[${lArray},7].NotEqual[${Me.CleanName}]}) {
+			/call GetINIArrayCount ${iniName} "${itemName}" BuyerMatchOnly NULL
+			/varset matchOnlyCount ${Macro.Return}
+			/if (${matchOnlyCount}) {
+				/for moLoop 1 to ${matchOnlyCount}
+					/call GetINISetting ${iniName} "${itemName}" BuyerMatchOnly${moLoop}
+					/if (${Macro.Return.Equal[${SearchResults[${lArray},7]}]}) /varset matchFound TRUE
+				/if (!${matchFound}) /next moLoop
+			}
+			/call GetINISetting ${iniName} "${itemName}" BuyerMatchOnly${Math.Calc[${matchOnlyCount}+1].Int} NULL
+			
+			/if (!${matchFound}) {
+				/call CheckGlobalIgnore ${SearchResults[${lArray},7]} Buy
+				/if (${Macro.Return.Equal[FALSE]}) {
+					/varset matchFound TRUE
+					/call GetINIArrayCount ${iniName} "${itemName}" BuyerIgnore NULL
+					/varset iIgnoreCount ${Macro.Return}
+					/if (${iIgnoreCount}) {
+						/for igLoop 1 to ${iIgnoreCount}
+							/call GetINISetting ${iniName} "${itemName}" BuyerIgnore${igLoop}
+							/if (${Macro.Return.Equal[${SearchResults[${lArray},7]}]}) /varset matchFound FALSE
+						/if (${matchFound}) /next igLoop
+					}
+					/call GetINISetting ${iniName} "${itemName}" BuyerIgnore${Math.Calc[${iIgnoreCount}+1].Int} NULL
+				}
+				/if (${matchFound}) {
+					/if (${matchOnlyCount}) {
+						/call GetINISetting ${iniName} "${itemName}" BuyerMatchOnlyOverrideQty
+					} else {
+						/call GetINISetting ${iniName} "${itemName}" BuyerMinimumQty
+					}
+					/if (${SearchResults[${lArray},2]}<${Macro.Return}) /varset matchFound FALSE
+				}
+			}
+			/if (${matchFound}) {
+				/call ToCopper ${SearchResults[${lArray},3]} ${SearchResults[${lArray},4]} ${SearchResults[${lArray},5]} ${SearchResults[${lArray},6]}
+				/varset thisPrice ${Macro.Return}
+				/if (${thisPrice} > ${highestPrice}) {
+					/varset highestPrice ${thisPrice}
+					/varset highestPriceID ${lArray}
+				}
+			}
+		}
+	/next lArray
+/return ${highestPrice}
+
+Sub CheckGlobalIgnore(string tName, string varString)
+	/declare iLoop			int local 0
+	/declare var				string local
+	
+	/if (!${Defined[varString]}) {
+		/if (${setMode.Equal[Trader]}) {
+			/varset var Sell
+		} else {
+			/varset var Buy
+		}
+	} else {
+		/varset var ${varString}
+	}		
+	/if (${global${var}IgnoreCount}) {
+		/for iLoop 1 to ${global${var}IgnoreCount}
+			/if (${global${var}Ignore[${iLoop}].Equal[${tName}]}) /return TRUE
+		/next iLoop	
+	}
+/return FALSE
+
+Sub ToCopper(int tPlat, int tGold, int tSilver, int tCopper)
+	/declare tempCopper string local 0
+	/varset tempCopper ${Math.Calc[${tCopper} + (${tSilver}*10) + (${tGold}*100) + (${tPlat}*1000)]}
+/return ${tempCopper}
+
+Sub PerformSearchBuyer(string searchStr)
+	/if (!${Window[BarterSearchWnd]}) {
+		/barter
+		/delay 5s ${Window[BarterSearchWnd]}
+		/if (!${Window[BarterSearchWnd]}) {
+			/call EchoLog "\ayError, unable to open Barter Search Window, search aborting."
+			/return ABORT_NOWINDOW
+		}
+	}
+	| /notify BazaarSearchWnd BZR_Default leftmouseup
+	/call ClearText BarterSearchWnd BTRSRCH_ItemSearchEdit
+	/delay 2s !${Window[BarterSearchWnd].Child[BTRSRCH_ItemSearchEdit].Text.Length}
+	/if (${Window[BarterSearchWnd].Child[BTRSRCH_ItemSearchEdit].Text.Length}) /call ClearText BarterSearchWnd BTRSRCH_ItemSearchEdit
+	/notify BarterSearchWnd BTRSRCH_ItemSearchEdit leftmouseup
+	/call Type "${searchStr}"
+
+	/delay ${perItemTimeout} ${Window[BarterSearchWnd].Child[BTRSRCH_SearchButton].Enabled}
+	
+	/if (${Window[BarterSearchWnd].Child[BTRSRCH_SearchButton].Enabled}) {
+		/notify BarterSearchWnd BTRSRCH_SearchButton leftmouseup
+		
+		/declare rCount			int local 0
+		:search_populateB
+			/delay 2s ${rCount}!=${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].Items}
+			/if (${rCount}!=${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].Items}) {
+				/varset rCount ${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].Items}
+				/goto :search_populateB
+			}
+	
+		/call PopulateSearchResultsBuyer
+	} else {
+		/return ABORT_TIMEOUT
+	}
+/return ${rCount}	
+
+Sub PerformSearch(string searchStr)
+	/if (!${Window[BazaarSearchWnd]}) {
+		/bazaar
+		/delay 5s ${Window[BazaarSearchWnd]}
+		/if (!${Window[BazaarSearchWnd]}) {
+			/call EchoLog "\ayError, unable to open Bazaar Search Window, search aborting."
+			/return ABORT_NOWINDOW
+		}
+	}
+	/notify BazaarSearchWnd BZR_Default leftmouseup
+	| /delay 2s !${Window[BazaarSearchWnd].Child[BZR_ItemNameInput].Text.Length}
+	/if (${Window[BazaarSearchWnd].Child[BZR_ItemNameInput].Text.Length}) /call ClearText BazaarSearchWnd BZR_ItemNameInput
+	/delay 2s !${Window[BazaarSearchWnd].Child[BZR_ItemNameInput].Text.Length}
+	/notify BazaarSearchWnd BZR_ItemNameInput leftmouseup
+	/call Type "${searchStr}"
+
+	/delay ${perItemTimeout} ${Window[BazaarSearchWnd].Child[BZR_QueryButton].Enabled}
+	
+	/if (${Window[BazaarSearchWnd].Child[BZR_QueryButton].Enabled}) {
+		/notify BazaarSearchWnd BZR_QueryButton leftmouseup
+		
+		/declare rCount			int local 0
+		:search_populate
+			/delay 2s ${rCount}!=${Window[BazaarSearchWnd].Child[BZR_ItemList].Items}
+			/if (${rCount}!=${Window[BazaarSearchWnd].Child[BZR_ItemList].Items}) {				
+				/varset rCount ${Window[BazaarSearchWnd].Child[BZR_ItemList].Items}
+				/goto :search_populate
+			}
+	
+		/call PopulateSearchResults
+	} else {
+		/return ABORT_TIMEOUT
+	}
+/return ${rCount}
+
+Sub ClearSearchResults
+	/declare csArray			int local 0
+	/declare csArray1			int local 0
+	
+	/deletevar SearchResults
+	/declare SearchResults[200,10]		string outer
+	
+	/varset SearchResultsCount 0
+/return
+
+Sub PopulateSearchResults
+	/declare ilArray				int local 0
+	/declare ilArrayb				int local 0
+	/declare addedItem			string local
+
+
+	/call ClearSearchResults
+	| Array key
+	| 1 - Item Name
+	| 2 - Qty
+	| 3 - Plat
+	| 4 - Gold
+	| 5 - Silver
+	| 6 - Copper
+	| 7 - Trader
+	/for ilArray 1 to 200
+		/if (${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},2].NotEqual[NULL]} && ${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},2].Length}) {
+			/if (${addedItem.Find[|${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},2]}${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},8]}|]}) {
+				| Item already added once from the same seller, combine them instead
+				/for ilArrayb 1 to ${SearchResultsCount}
+					/if (${SearchResults[${ilArrayb},1].Equal[${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},2]}]} && ${SearchResults[${ilArrayb},7].Equal[${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},8]}]}) {
+						/varset SearchResults[${ilArrayb},2] ${Math.Calc[${SearchResults[${ilArrayb},2]} + ${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},3]}]}
+					} else {
+						/next ilArrayb
+					}
+			} else {
+				/varset SearchResults[${ilArray},1] ${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},2]}
+				/varset SearchResults[${ilArray},2] ${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},3]}
+				/varset SearchResults[${ilArray},3] ${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},4]}
+				/varset SearchResults[${ilArray},4] ${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},5]}
+				/varset SearchResults[${ilArray},5] ${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},6]}
+				/varset SearchResults[${ilArray},6] ${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},7]}
+				/varset SearchResults[${ilArray},7] ${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},8]}
+				/varset SearchResultsCount ${ilArray}
+				/varset addedItem ${addedItem}|${SearchResults[${ilArray},1]}${SearchResults[${ilArray},7]}|
+			}
+		}
+	/next ilArray
+/return
+
+Sub PopulateSearchResultsBuyer
+	/declare ilArray				int local 0
+	/declare iLoop					int local 0
+	/declare iPrice					string local
+	/declare p							int local 3
+	/declare g							int local 4
+	/declare s							int local 5
+	/declare c							int local 6
+	/declare ilArrayb				int local 0
+	/declare addedItem			string local
+	/declare tempPrice[4]		string local
+	/declare priceA					string local
+	/declare priceB					string local
+	/declare priceP[4]			string local
+	
+	/call ClearSearchResults
+	| Array key
+	| 1 - Item Name
+	| 2 - Qty
+	| 3 - Plat
+	| 4 - Gold
+	| 5 - Silver
+	| 6 - Copper
+	| 7 - Trader
+	/for ilArray 1 to 200
+		/if (${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].List[${ilArray},2].NotEqual[NULL]} && ${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].List[${ilArray},2].Length}) {
+			/if (${addedItem.Find[|${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},2]}${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},8]}|]}) {
+				| Item already added once from the same buyer, combine them instead
+				/for ilArrayb 1 to ${SearchResultsCount}
+					/if (${SearchResults[${ilArrayb},1].Equal[${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},2]}]} && ${SearchResults[${ilArrayb},7].Equal[${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},8]}]}) {
+						| Need to figure out how to handle the price
+						/varset iPrice ${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].List[${ilArray},4]}
+						/if (${iPrice.Count[ ]}) {
+							/varset tempPrice[1] 0
+							/varset tempPrice[2] 0
+							/varset tempPrice[3] 0
+							/varset tempPrice[4] 0
+							/for iLoop 1 to ${Math.Calc[${iPrice.Count[ ]}+1]}
+								/if (${iPrice.Arg[${iLoop}, ].NotEqual[NULL]}) /varset tempPrice[${iLoop}] ${iPrice.Arg[${iLoop}, ].Left[-1]}
+							/next iLoop
+						} else {
+							/varset tempPrice[1] 0
+							/varset tempPrice[2] 0
+							/varset tempPrice[3] 0
+							/varset tempPrice[4] 0
+							/varset tempPrice[${Math.Calc[${${iPrice.Right[1]}} - 2]}] ${iPrice.Left[-1]}
+						}
+						/call ToCopper ${tempPrice[1]} ${tempPrice[2]} ${tempPrice[3]} ${tempPrice[4]}
+						/varset priceA ${Macro.Return}
+						/call ToCopper ${SearchResults[${ilArrayb},3]} ${SearchResults[${ilArrayb},4]} ${SearchResults[${ilArrayb},5]} ${SearchResults[${ilArrayb},6]}
+						/varset priceB ${Macro.Return}
+						
+						/varset priceA ${Math.Calc[${priceA} * ${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].List[${ilArray},3]}].Int}
+						/varset priceB ${Math.Calc[${priceB} * ${SearchResults[${ilArrayb},2]}].Int}
+						/varset priceA ${Math.Calc[${priceA} + ${priceB}].Int}
+						/varset priceA ${Math.Calc[${priceA} / (${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].List[${ilArray},3]} + ${SearchResults[${ilArrayb},2]})].Int}
+
+						/varset priceP[1] ${If[${priceA.Length} > 3,${priceA.Left[${Math.Calc[${priceA.Length}-3]}]},0]}
+						/varset priceP[2] ${If[${priceA.Length} > 2,${priceA.Mid[${Math.Calc[${priceA.Length} - 2]},1]},0]}
+						/varset priceP[3] ${If[${priceA.Length} > 1,${priceA.Mid[${Math.Calc[${priceA.Length} - 1]},1]},0]}
+						/varset priceP[4] ${If[${priceA.Length},${priceA.Right[1]},0]}
+						
+						/varset SearchResults[${ilArrayb},2] ${Math.Calc[${SearchResults[${ilArrayb},2]} + ${Window[BazaarSearchWnd].Child[BZR_ItemList].List[${ilArray},3]}]}
+						/varset SearchResults[${ilArrayb},3] ${priceP[1]}
+						/varset SearchResults[${ilArrayb},4] ${priceP[2]}
+						/varset SearchResults[${ilArrayb},5] ${priceP[3]}
+						/varset SearchResults[${ilArrayb},6] ${priceP[4]}
+					} else {
+						/next ilArrayb
+					}
+			} else {
+				/varset SearchResults[${ilArray},1] ${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].List[${ilArray},2]}
+				/varset SearchResults[${ilArray},2] ${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].List[${ilArray},3]}
+				| Price is all in one column for buyer search, parse it out
+				/varset iPrice ${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].List[${ilArray},4]}
+				/if (${iPrice.Count[ ]}) {
+					/varset SearchResults[${ilArray},3] 0
+					/varset SearchResults[${ilArray},4] 0
+					/varset SearchResults[${ilArray},5] 0
+					/varset SearchResults[${ilArray},6] 0
+					/for iLoop 1 to ${Math.Calc[${iPrice.Count[ ]}+1]}
+						/if (${iPrice.Arg[${iLoop}, ].NotEqual[NULL]}) /varset SearchResults[${ilArray},${${iPrice.Arg[${iLoop}, ].Right[1]}}] ${iPrice.Arg[${iLoop}, ].Left[-1]}
+					/next iLoop
+				} else {
+					/varset SearchResults[${ilArray},3] 0
+					/varset SearchResults[${ilArray},4] 0
+					/varset SearchResults[${ilArray},5] 0
+					/varset SearchResults[${ilArray},6] 0
+					/varset SearchResults[${ilArray},${${iPrice.Right[1]}}] ${iPrice.Left[-1]}
+				}
+				
+				/varset SearchResults[${ilArray},7] ${Window[BarterSearchWnd].Child[BTRSRCH_BuyLineList].List[${ilArray},5]}
+				/varset SearchResultsCount ${ilArray}
+				/varset addedItem ${addedItem}|${SearchResults[${ilArray},1]}${SearchResults[${ilArray},7]}|			
+			}
+		}
+	/next ilArray
+/return
+
+Sub TraderItemTimer(string itemName,string setTo)
+	/declare tiLoop				int local 0
+	/declare itemFound		bool local FALSE
+	/declare tiCount			int local 0
+	/for tiLoop 1 to 10000
+		/if (${traderItems[${tiLoop}].Equal[${itemName}]}) {
+			/varset itemFound TRUE
+			/if (${Defined[setTo]}) {
+				/if (!${Defined[traderItemTimer${tiLoop}]}) /declare traderItemTimer${tiLoop} timer outer 0s
+				/varset traderItemTimer${tiLoop} ${setTo}
+				/return TRUE
+			} else {
+				/if (!${Defined[traderItemTimer${tiLoop}]} || !${traderItemTimer${tiLoop}}) /return FALSE
+				/return TRUE
+			}
+		}
+		/varcalc tiCount ${tiCount} + 1
+	/if (!${itemFound} && ${traderItems[${tiLoop}].NotEqual[NULL]}) /next tiLoop
+		
+	/if (!${itemFound}) {
+		/if (${Defined[setTo]}) {
+			/if (!${Defined[traderItemTimer${tiCount}]}) /declare traderItemTimer${tiCount} timer outer 0s
+			/varset traderItemTimer${tiCount} ${setTo}
+			/return TRUE
+		} else {
+			/return FALSE
+		}		
+	}
+/return FALSE
+
+Sub LoadSettings
+	/declare nArray								int outer 0
+	/declare colorEcho						bool outer FALSE
+	/declare defaultEchoColor			string outer \aw
+	/declare traderItems[10000]		string outer NULL
+	/declare INIVar								string outer Ini
+	
+	/if (${Plugin[MQ2CEcho].Version}) {
+		/squelch /alias /myecho /cecho \aw[MQ2]
+		/varset colorEcho TRUE
+	} else {
+		/squelch /alias /myecho /echo
+		/varset colorEcho FALSE
+	}	
+	/if (${MMOBugs}) /varset INIVar MMOIni
+	
+	/call GetINISetting ${iniName} General DebugMode debugMode ${debugMode} FALSE
+	
+	/call EchoLog "Loading settings from ${iniName}" TRUE
+	
+	/declare checkTimer				timer outer 0s
+	/call GetINISetting ${iniName} General CheckFrequency checkFrequency 5m TRUE string
+	/call GetINISetting ${iniName} General PerItemTimeout perItemTimeout 2m TRUE string
+	/call GetINISetting ${iniName} General MinTimeBetweenItems timeBetween 30s TRUE string
+	/call GetINISetting ${iniName} General MinTimeBetweenPriceUpdates timeBetweenPrice 5m TRUE string
+	/call GetINISetting ${iniName} General AutoEnableTrader autoEnableTrader FALSE TRUE bool
+	/call GetINISetting ${iniName} General AutoEnableBuyer autoEnableBuyer FALSE TRUE bool
+	/call GetINISetting ${iniName} General RemoveCommas removeCommas TRUE FALSE bool
+	
+	/call GetINIArrayCount ${iniName} Global_Sell_Ignore TraderName NULL globalSellIgnoreCount
+	/call GetINIArrayCount ${iniName} Global_Buy_Ignore TraderName NULL globalBuyIgnoreCount
+	
+	/declare globalSellIgnore[${globalSellIgnoreCount}]		string outer
+	/declare globalBuyIgnore[${globalBuyIgnoreCount}]			string outer
+	
+	| Load globally ignored sellers
+	/call EchoLog "Loading ${globalSellIgnoreCount} globally ignored sellers." TRUE
+	/if (${globalSellIgnoreCount}) {
+		/for nArray 1 to ${globalSellIgnoreCount}
+			/call GetINISetting ${iniName} Global_Sell_Ignore TraderName${nArray} globalSellIgnore[${nArray}] NULL
+			/call EchoLog ".....${nArray}: ${globalSellIgnore[${nArray}]}" TRUE
+		/next nArray
+	}
+	/call GetINISetting ${iniName} Global_Sell_Ignore TraderName${Math.Calc[${globalSellIgnoreCount} + 1].Int} NULL
+
+	| Load global ignored buyers
+	/call EchoLog "Loading ${globalBuyIgnoreCount} globally ignored sellers." TRUE
+	/if (${globalBuyIgnoreCount}) {
+		/for nArray 1 to ${globalBuyIgnoreCount}
+			/call GetINISetting ${iniName} Global_Buy_Ignore BuyerName${nArray} globalBuyIgnore[${nArray}] NULL
+			/call EchoLog ".....${nArray}: ${globalBuyIgnore[${nArray}]}" TRUE
+		/next nArray
+	}
+	/call GetINISetting ${iniName} Global_Buy_Ignore BuyerName${Math.Calc[${globalBuyIgnoreCount} + 1].Int} NULL
+
+	| Default undercut settings
+	/call GetINISetting ${iniName} UndercutSettings DefaultUndercutAmount defaultUndercutAmount 1000 TRUE int
+	/call GetINISetting ${iniName} UndercutSettings UndercutWithNoMinMax undercutNoMinMax FALSE TRUE bool
+	/call GetINIArrayCount ${iniName} UndercutSettings UnderCutMinPrice NULL undercutCount
+	/declare undercutSettings[${undercutCount},3]			string outer
+	/call EchoLog "Loading ${undercutCount} undercut settings." TRUE
+	/if (${undercutCount}) {
+		/for nArray 1 to ${undercutCount}
+			/call GetINISetting ${iniName} UndercutSettings UndercutMinPrice${nArray} undercutSettings[${nArray},1] NULL
+			/call GetINISetting ${iniName} UndercutSettings UndercutMaxPrice${nArray} undercutSettings[${nArray},2] NULL
+			/call GetINISetting ${iniName} UndercutSettings UndercutCalc${nArray} undercutSettings[${nArray},3] NULL
+			/call EchoLog ".....Min Price: ${undercutSettings[${nArray},1]} Max Price: ${undercutSettings[${nArray},2]} Calc: ${undercutSettings[${nArray},3]}" TRUE
+		/next nArray
+	}
+	/call GetINISetting ${iniName} UndercutSettings UndercutMinPrice${Math.Calc[${undercutCount}+1].Int} NULL
+	/call GetINISetting ${iniName} UndercutSettings UndercutMaxPrice${Math.Calc[${undercutCount}+1].Int} NULL
+	/call GetINISetting ${iniName} UndercutSettings UndercutCalc${Math.Calc[${undercutCount}+1].Int} NULL
+
+
+	| Default outbid settings
+	/call GetINISetting ${iniName} OutbidSettings DefaultOutbidAmount defaultOutbidAmount 1000 TRUE int
+	/call GetINISetting ${iniName} OutbidSettings OutbidWithNoMinMax outbidNoMinMax FALSE TRUE bool
+	/call GetINIArrayCount ${iniName} OutbidSettings OutbidMinPrice NULL outbidCount
+	/declare outbidSettings[${outbidCount},3]			string outer
+	/call EchoLog "Loading ${outbidCount} out bid settings." TRUE
+	/if (${outbidCount}) {
+		/for nArray 1 to ${outbidCount}
+			/call GetINISetting ${iniName} OutbidSettings OutbidMinPrice${nArray} outbidSettings[${nArray},1] NULL
+			/call GetINISetting ${iniName} OutbidSettings OutbidMaxPrice${nArray} outbidSettings[${nArray},2] NULL
+			/call GetINISetting ${iniName} OutbidSettings OutbidCalc${nArray} outbidSettings[${nArray},3] NULL
+			/call EchoLog ".....Min Price: ${outbidSettings[${nArray},1]} Max Price: ${outbidSettings[${nArray},2]} Calc: ${outbidSettings[${nArray},3]}" TRUE
+		/next nArray
+	}
+	/call GetINISetting ${iniName} OutbidSettings OutbidMinPrice${Math.Calc[${outbidCount}+1].Int} NULL
+	/call GetINISetting ${iniName} OutbidSettings OutbidMaxPrice${Math.Calc[${outbidCount}+1].Int} NULL
+	/call GetINISetting ${iniName} OutbidSettings OutbidCalc${Math.Calc[${outbidCount}+1].Int} NULL	
+
+	/call GetINISetting ${iniName} BuyLines MinTimeBetweenItemReadds minTimeReadd 5m TRUE string
+	/call GetINIArrayCount ${iniName} BuyLines BuyLineItem NULL buyLinesCount
+	/call EchoLog "Loading ${buyLinesCount} buy lines" TRUE
+	/declare buyLines[${buyLinesCount},4]				string outer
+	/if (${buyLinesCount}) {
+		/for nArray 1 to ${buyLinesCount}
+			/call GetINISetting ${iniName} BuyLines BuyLineItem${nArray} buyLines[${nArray},1] NULL
+			/call GetINISetting ${iniName} BuyLines BuyLineQty${nArray} buyLines[${nArray},2] NULL
+			/call GetINISetting ${iniName} BuyLines BuyLinePrice${nArray} buyLines[${nArray},3] NULL
+			/call GetINISetting ${iniName} BuyLines BuyLineReaddCount${nArray} buyLines[${nArray},4] NULL
+			/call EchoLog ".....Item: ${buyLines[${nArray},1]} Qty: ${buyLines[${nArray},2]} Price: ${buyLines[${nArray},3]} Readds Remaining: ${buyLines[${nArray},4]}" TRUE
+		/next nArray
+	}
+	/call GetINISetting ${iniName} BuyLines BuyLineItem${Math.Calc[${buyLinesCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} BuyLines BuyLineQty${Math.Calc[${buyLinesCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} BuyLines BuyLinePrice${Math.Calc[${buyLinesCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} BuyLines BuyLineReaddCount${Math.Calc[${buyLinesCount}+1].Int} NULL 100
+	
+						
+	/declare SearchResults[200,10]		string outer
+	/declare SearchResultsCount				int outer 0
+	/declare highestPriceID						int outer 0
+	/declare lowestPriceID						int outer 0
+	/call ClearSearchResults
+/return
+
+Sub EchoLog(string eMsg, bool logOnly)
+	/declare sMsg			string local
+
+	/if (!${Defined[eMsg]})	/return
+	/if (!${Defined[logOnly]}) /declare logOnly	bool local FALSE
+
+	/call StripText "${eMsg}"
+	/varset sMsg ${Macro.Return}
+	/varset eMsg ${defaultEchoColor}${eMsg}
+	/if (!${colorEcho}) /varset eMsg ${sMsg}
+	/if (!${logOnly} || ${debugMode}) /myecho >> ${eMsg}
+	
+	/mqlog [${Me.CleanName}] ${sMsg}
+/return
+
+Sub StripText(string cString)
+	/declare argNum			int local
+	/declare wString		string local
+	/declare argString	string local
+	
+	/if (!${Defined[cString]}) /return
+	/if (!${cString.Find[\]}) /return ${cString}
+	/varset wString ${cString}
+	
+	:nextArg
+		/varset argNum ${cString.Find[\a]}
+		/varset argString ${cString.Mid[${argNum},3]}
+		/if (${argString.Left[1].Equal[\]} && ${argString.Length} == 3) {
+			/if (${argString.Right[1].Equal[#]}) /varset argString ${wString.Mid[${argNum},9]}
+			/if (${cString.Find[${argString}]}) /varset cString ${cString.Replace[${argString},]}
+		}
+		/if (${cString.Find[\a]}) /goto :nextArg
+/return ${cString}
+
+Sub GetINIArrayCount(string ININame,string INISection,string INIKeyPrefix,string invalidValue,string VariableName)
+	/if (!${Defined[ININame]}) /return 0
+	/if (!${Defined[INISection]}) /return 0
+	/if (!${Defined[INIKeyPrefix]}) /return 0
+	/if (!${Defined[invalidValue]}) /declare invalidValue				string local NULL
+	
+	/declare iniCount					int local 0
+	
+	:iniArrayLoop
+		/varcalc iniCount ${iniCount} + 1
+		/if (${${INIVar}[${ININame},"${INISection}",${INIKeyPrefix}${iniCount},${invalidValue}].NotEqual[${invalidValue}]}) /goto :iniArrayLoop
+	/varcalc iniCount ${iniCount} - 1
+	
+	/if (${Defined[VariableName]} && !${Defined[${VariableName}]}) {
+		/declare ${VariableName} int outer ${iniCount}
+	} else /if (${Defined[VariableName]}) {
+		/varset ${VariableName} ${iniCount}
+	}
+/return ${iniCount}
+
+Sub GetINISetting(string ININame,string INISection,string INIKey,string VariableName,string defaultValue,string createSettingStr,string variableType)
+	/if (!${Defined[ININame]}) /return INVALIDINI
+	/if (!${Defined[INISection]}) /return INVALIDSECTION
+	/if (!${Defined[INIKey]}) /return INVALIDKEY
+	/if (!${Defined[VariableName]}) /declare VariableName string local NULL
+	/if (${Defined[createSettingStr]} && ${createSettingStr.NotEqual[TRUE]} && ${createSettingStr.NotEqual[FALSE]} && !${Defined[variableType]}) {
+		/declare variableType		string local ${createSettingStr}
+		/declare createSetting	bool local TRUE
+	} else /if (${Defined[createSettingStr]}) {
+		/declare createSetting	bool local ${createSettingStr}
+	}
+	/if (!${Defined[createSetting]}) /declare createSetting 	bool local TRUE
+	/if (!${Defined[defaultValue]}) /declare defaultValue 		string local NULL
+	/if (!${Defined[variableType]}) /declare variableType			string local NULL
+	/declare iniValue						string local NULL
+	
+	/varset iniValue ${${INIVar}[${ININame},"${INISection}",${INIKey},DOES_NOT_EXIST]}
+	/if (${iniValue.Equal[DOES_NOT_EXIST]} || ${iniValue.Equal[NULL]}) {
+		/if (${createSetting} && ${iniValue.NotEqual[NULL]}) /ini "${ININame}" "${INISection}" "${INIKey}" "${defaultValue}"
+		/varset iniValue ${defaultValue}
+	}
+	/if (!${Defined[${VariableName}]} && ${variableType.NotEqual[NULL]}) /declare ${VariableName} ${variableType} outer
+	/if (${VariableName.NotEqual[NULL]}) /varset ${VariableName} ${iniValue}
+/return ${iniValue}
+
+Sub ClearText(string windowName,string inputName)
+	/declare cArray		int local 0
+	/declare chars		int local ${Window[${windowName}].Child[${inputName}].Text.Length}
+	
+	/nomodkey /notify ${windowName} ${inputName} leftmouseup	
+	/if (!${chars}) /return
+	
+	:clearText
+		/varset chars ${Window[${windowName}].Child[${inputName}].Text.Length}
+		/nomodkey /notify ${windowName} ${inputName} leftmouseup		
+		/delay 5	
+		/for cArray 1 to ${chars}
+			/nomodkey /keypress backspace chat
+		/next cArray
+	/if (${Window[${windowName}].Child[${inputName}].Text.Length}) /goto :clearText
+/return
+
+Sub Type(InStr)
+   /declare char string local
+   /declare loopctr int local
+   /declare shiftKeys string local !@#$%^&*()~_+{}|:<>?
+   /declare keyLoc int local 0
+   
+   /for loopctr 1 to ${InStr.Length}
+      /varset char ${InStr.Mid[${loopctr},1]}
+      /if (!${char.Length}) {
+         /nomodkey /keypress space chat
+      } else {
+      	/varset keyLoc ${shiftKeys.Find[${char}]}
+      	/if (${keyLoc}) {
+      		/if (${keyLoc} <= 10) {
+      			/if (${keyLoc} == 10) /varset keyLoc 0
+      			/varset char ${keyLoc}
+      		} else {
+      			/if (${keyLoc}==11) {
+      				/varset char `
+      			} else /if (${keyLoc}==12) {
+      				/varset char -
+      			} else /if (${keyLoc}==13) {
+      				/varset char =
+      			} else /if (${keyLoc}==14) {
+      				/varset char [
+      			} else /if (${keyLoc}==15) {
+      				/varset char ]
+      			} else /if (${keyLoc}==16) {
+      				/varset char \
+      			} else /if (${keyLoc}==17) {
+      				/varset char ;
+      			} else /if (${keyLoc}==18) {
+      				/varset char ,
+						} else /if (${keyLoc}==19) {
+      				/varset char .
+      		 	} else /if (${keyLoc}==20) {
+      				/varset char /
+      			}
+      		}
+      		/shiftkey /keypress ${char} chat
+      	} else {
+        	/nomodkey /keypress ${char} chat
+        }
+      }
+   /next loopctr
+/return 

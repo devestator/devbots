@@ -1,0 +1,281 @@
+| =================================================================================================
+| 									   Caster Assist
+| 									Written By: Devestator
+| 													
+| 													
+| USAGE: /macro casterassist
+| 													
+| 													
+| Description:												
+|  This is a simple caster assist macro.
+| 													
+| 													
+| Requirements:												
+|  MQ2Cast_Spell_Routines.inc										
+|  PLUGIN: MQ2Cast
+| 
+| v1.4
+|  -Updated to combat pets as well
+| ==================================================================================================
+
+#include MQ2Cast_Spell_Routines.inc
+#include devLoot.inc
+
+Sub main(string assistName,int assistAtPct)
+	/declare meVersion		float outer 1.4
+	/if (!${Defined[assistName]}) /declare assistName			string local NULL
+	/if (!${Defined[assistAtPct]}) /declare assistAtPct		int local 0
+	/call LoadSettings ${assistName} ${assistAtPct}
+	
+	/echo Caster Assist v${meVersion} started
+	/echo Assisting: ${mainAssist}
+	/echo Casting Start: ${HPStart}
+	/echo Casting Stop: ${HPStop}
+	/echo Sitting Out of Combat: ${oocSit}
+	/echo Invising Out of Combat: ${oocInvis}
+	/call LootInit
+	:mainLoop
+		/if (${mercMode} && (!${mercMasterID} || ${mercMasterID} != ${Spawn[pc ${mercMaster}].ID})) {
+			/varset mercMasterID ${Spawn[pc ${mercMaster}].ID}
+		}
+		/if (${mercMode} && ${mercMasterID} && ${Spawn[ID ${mercMasterID}].Distance} > ${mercLeashRange} - 10) {
+			/if (${Me.Sitting}) /stand
+			/squelch /target ID ${mercMasterID}
+			/delay 2s ${Target.ID}==${mercMasterID}
+			/if (${Target.ID}==${mercMasterID}) {
+				/squelch /stick hold 10
+				/delay 2
+				/squelch /target clear
+			}
+		}	
+		/if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[PET]} && ${Target.Master.Type.Equal[NPC]})) && ${Target.Distance} < ${campRadius}) {
+			/if (${Me.Sitting}) /stand
+			/varset engagePet TRUE
+			/squelch /stick off
+			/call Combat
+			/if (${mercMode} && ${mercMasterID}) {
+				/squelch /target ID ${mercMasterID}
+				/delay 2s ${Target.ID}==${mercMasterID}
+				/if (${Target.ID}==${mercMasterID}) {
+					/squelch /stick hold 10
+					/delay 2
+					/squelch /target clear
+				}
+			}			
+		} else {
+			/varset currID ${Target.ID}
+			/assist ${mainAssist}
+			/delay 1s ${Target.ID}!=${currID}
+		}
+		/doevents
+		/if (${oocInvis} && !${Me.Invis}) /call MQ2Cast "${invisSpell}" ${invisSlot}
+		/if (${oocSit} && !${Me.Sitting} && !${Me.Mount.ID} && !${Me.Moving} && !${Me.Casting.ID} && (${Me.PctMana} < 90 || ${Me.PctHPs} < 90)) /sit on
+	/goto :mainLoop
+/return
+
+Sub Combat
+	/declare spellNum						int local 0
+	/declare exitTimer					timer local 0
+	/declare exitTimerSet				bool local FALSE
+	/declare dbCount				int local 0
+	
+	:combatLoop
+		/if (${mercMode} && ${mercMasterID} && ${Spawn[ID ${mercMasterID}].Distance} > ${mercLeashRange} - 10) {
+			/squelch /target ID ${mercMasterID}
+			/delay 2s ${Target.ID}==${mercMasterID}
+			/if (${Target.ID}==${mercMasterID}) {
+				/squelch /stick hold 10
+				/delay 2
+				/squelch /target clear
+				/delay 30s ${Spawn[ID ${mercMasterID}].Distance}<15
+				/squelch /stick off
+			}
+		}	
+		/varset currID ${Target.ID}
+		/assist ${mainAssist}
+		/delay 1s ${Target.ID}!=${currID}
+		/if (${Target.ID}!=${currID}) {
+			/varset engagePet TRUE
+			/varset spellNum 0
+			/if ((!${Spawn[${currID}].ID} || ${Spawn[${currID}].Type.Equal[Corpse]}) && ${Defined[Debuffed${currID}]}) /deletevar Debuffed${currID}
+		}
+		:cStart
+		/if (${Target.ID} && ${Target.Type.Equal[NPC]} && ${Target.Distance} < ${campRadius} && ${Target.PctHPs} <= ${HPStart} && ${Target.PctHPs} >= ${HPStop}) {
+			/varset targID ${Target.ID}
+			/if (${Me.PctHPs} >= ${HPHealth}) {
+				/if (${engagePet} && ${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) {
+					/pet attack
+					/varset engagePet FALSE
+				}
+				/if (${Me.PctMana} >= ${ManaStop}) {
+					/if (!${Defined[Debuffed${Target.ID}]}) {
+						/for nArray 1 to 20
+							/if (${debuffs[${nArray}].NotEqual[NULL]}) {
+								/varcalc dbCount ${dbCount} + 1
+								/if (${Target.ID} && ${Target.PctHPs} >= ${HPStop} && ${Me.PctMana} >= ${ManaStop} && ${Me.PctHPs} >= ${HPHealth}) {
+									/if (${Me.AltAbilityReady[${debuffs[${nArray}]}]} || ${Me.SpellReady[${debuffs[${nArray}]}]} || (${FindItem[${debuffs[${nArray}]}].InvSlot} && !${FindItem[${debuffs[${nArray}]}].Timer})) {
+										/call MQ2Cast "${debuffs[${nArray}]}" -maxtries|${resistTries}
+										/delay ${minCastRest}
+										/if (${Cast.Result.Equal[CAST_SUCCESS]} && !${Defined[Debuffed${Target.ID}]}) /declare Debuffed${Target.ID}		bool outer TRUE
+									}
+								}
+							}
+						/next nArray
+						/if (!${dbCount} && ${Target.ID} && !${Defined[Debuffed${Target.ID}]}) /declare Debuffed${Target.ID}	bool outer TRUE
+					} else {
+						/varcalc spellNum ${spellNum} + 1
+						/if (${spells[${spellNum}].NotEqual[NULL]} && (!${Defined[spellCD${spellNum}]} || !${spellCD${spellNum}})) {
+							/call MQ2Cast "${spells[${spellNum}]}" -maxtries|${resistTries}
+							/if (${Cast.Result.Equal[CAST_SUCCESS]}) {
+								/if (${Spell[${spells[${spellNum}]}].Duration}) {
+									/if (!${Defined[spellCD${spellNum}]}) /declare spellCD${spellNum}		timer outer 0s
+									/varset spellCD${spellNum} ${Spell[${spells[${spellNum}]}].Duration.TotalSeconds}s
+								}
+							}
+							/delay ${minCastRest}
+						} else {
+							/varset spellNum 0
+						}
+					}
+				} else {
+					/call Rest
+				}
+			} else {
+				| No casting, waiting to heal
+			}
+		} else /if (${Target.Type.NotEqual[NPC]} && ${Spawn[${targID}].ID} && ${Spawn[${targID}].Distance} < ${campRadius} && ${Spawn[${targID}].Type.Equal[NPC]}) {
+			/if (${Spawn[${targID}].ID} && ${Spawn[${targID}].Distance} < ${campRadius}) {
+				/squelch /target ID ${targID}
+				/delay 1s ${Target.ID}==${targID}
+				/goto :cStart
+			}
+		} else /if (!${Target.ID} || ${Target.Type.NotEqual[NPC]}) {
+			/if ((!${Spawn[${targID}].ID} || ${Spawn[${targID}].Type.Equal[Corpse]}) && ${Defined[Debuffed${targID}]}) /deletevar Debuffed${targID}
+			/if (${exitTimerSet} && !${exitTimer}) {
+				/if (${Me.PctMana} < ${ManaStart}) /call MQ2Cast "${lowManaSpell}"
+				/if (${lootCorpses}) /call Loot
+				/return
+			} else /if (!${exitTimerSet}) {
+				/varset exitTimer 10s
+				/varset exitTimerSet TRUE
+			}
+		}
+	/goto :combatLoop
+/return
+
+Sub GetINISetting(string ININame,string INISection,string INIKey,string VariableName,string defaultValue,bool createSetting)
+	/if (!${Defined[ININame]}) /return INVALIDINI
+	/if (!${Defined[INISection]}) /return INVALIDSECTION
+	/if (!${Defined[INIKey]}) /return INVALIDKEY
+	/if (!${Defined[VariableName]}) /return INVALIDVARIABLE
+	/if (!${Defined[createSetting]}) /declare createSetting 	bool local TRUE
+	/if (!${Defined[defaultValue]}) /declare defaultValue 		string local NULL
+	/declare iniValue						string local NULL
+	
+	/varset iniValue ${Ini[${ININame},${INISection},${INIKey},DOES_NOT_EXIST]}
+	/if (${iniValue.Equal[DOES_NOT_EXIST]}) {
+		/if (${createSetting}) /ini "${ININame}" "${INISection}" "${INIKey}" "${defaultValue}"
+		/varset iniValue ${defaultValue}
+	}
+	/varset ${VariableName} ${iniValue}
+/return COMPLETED
+
+Sub LoadSettings(string assistName,int assistAtPct)
+	/declare iniName				string outer CA_${Me.CleanName}.ini
+	/declare nArray					int outer 0
+	/declare currID					int outer 0
+	/declare targID					int outer 0
+	/declare engagePet			bool outer FALSE
+	
+	/declare spellCount			int local 0
+	
+	/declare lootCorpses		bool outer
+	/call GetINISetting ${iniName} General LootCorpses lootCorpses FALSE
+	/declare HPStart				int outer
+	/if (${Defined[assistAtPct]} && ${assistAtPct} > 0) {
+		/call GetINISetting ${iniName} General HPStart HPStart ${assistAtPct}
+		/varset HPStart ${assistAtPct}
+	} else {
+		/call GetINISetting ${iniName} General HPStart HPStart 97
+	}
+	/declare HPStop					int outer
+	/call GetINISetting ${iniName} General HPStop HPStop 5
+	/declare HPHealth				int outer
+	/call GetINISetting ${iniName} General HPHealth HPHealth 30
+	/declare ManaStart			int outer
+	/call GetINISetting ${iniName} General ManaStart ManaStart 80
+	/declare ManaStop				int outer
+	/call GetINISetting ${iniName} General ManaStop ManaStop 10
+	/declare oocSit					bool outer
+	/call GetINISetting ${iniName} General MedYN oocSit TRUE
+	/declare mainAssist			string outer
+	/if (${Defined[assistName]} && ${assistName.NotEqual[NULL]}) {
+		/call GetINISetting ${iniName} General MainAssist mainAssist ${assistName}
+		/varset mainAssist ${assistName}
+	} else {
+		/call GetINISetting ${iniName} General MainAssist mainAssist PlayerName
+	}
+	/declare oocInvis				bool outer
+	/call GetINISetting ${iniName} General Invis oocInvis TRUE
+	/declare invisSpell			string outer
+	/call GetINISetting ${iniName} General InvisSpell invisSpell "Invis Spell or Item"
+	/declare minCastRest		string outer
+	/call GetINISetting ${iniName} General MinCoolDown minCastRest 5s
+	/declare resistTries		int outer
+	/call GetINISetting ${iniName} General CastRetry resistTries 2
+	/declare campRadius			float outer
+	/call GetINISetting ${iniName} General CampRadius campRadius 75
+	/declare lowManaSpell		string outer
+	/call GetINISetting ${iniName} General LowMana lowManaSpell "Low Mana Spell or Item" 
+
+	| /declare assistPct			int outer
+	| /call GetINISetting ${iniName} General AssistPct assistPct 97
+
+	/declare mercMode				bool outer FALSE
+	/declare mercMaster			string outer NULL
+	/declare mercMasterID		int outer 0
+	/declare mercLeashRange	int outer 40
+	/call GetINISetting ${iniName} General MercMode mercMode FALSE
+	/call GetINISetting ${iniName} General MercMaster mercMaster NULL
+	/call GetINISetting ${iniName} General MercLeashRange mercLeashRange 40
+
+	/varset mercMasterID ${Spawn[pc ${mercMaster}].ID}
+		
+	/declare debuffs[20]		string outer
+	/for nArray 1 to 20
+		/call GetINISetting ${iniName} Debuffs Debuff${nArray} debuffs[${nArray}] NULL
+		/if (${debuffs[${nArray}].NotEqual[NULL]}) /varcalc spellCount ${spellCount} + 1
+	/next nArray
+	
+	/declare spells[20]			string outer
+	/for nArray 1 to 20
+		/call GetINISetting ${iniName} Spells Spell${nArray} spells[${nArray}] NULL
+		/if (${spells[${nArray}].NotEqual[NULL]}) /varcalc spellCount ${spellCount} + 1
+	/next nArray
+	
+	/if (!${spellCount}) {
+		/echo An Ini has been created for this character named ${iniName}.
+		/echo Please edit that Ini and enter your spells and settings into it then run the Macro again.
+		/endmacro
+	}
+/return
+
+Sub Rest
+	:restLoop
+		/if (${mercMode} && ${mercMasterID} && ${Spawn[ID ${mercMasterID}].Distance} > ${mercLeashRange} - 10) {
+			/if (${Me.Sitting}) /squelch /stand
+			/squelch /target ID ${mercMasterID}
+			/delay 2s ${Target.ID}==${mercMasterID}
+			/if (${Target.ID}==${mercMasterID}) {
+				/squelch /stick hold 10
+				/delay 2
+				/squelch /target clear
+				/delay 30s ${Spawn[ID ${mercMasterID}].Distance}<15
+				/squelch /stick off
+			}
+		}		
+		/if (!${Me.Sitting} && !${Me.Mount.ID} && !${Me.Moving} && ${Me.PctHPs} > ${HPHealth}) /sit on
+		/doevents
+		/if (!${Spawn[${targID}].ID}) /return
+	/if (${Me.PctMana} < ${ManaStart}) /goto :restLoop
+/return
