@@ -1,0 +1,743 @@
+| =================================================================================================
+| 					WarriorBot v1.10
+| 						Written By: Devestator
+| 													
+| 													
+| USAGE: /macro warriorBot <IniName> <GroupRole>
+| 													
+| 													
+| Description:												
+| This is a bot to automate a warrior in a group.  Can be made to play the role of main tank
+| offtank, or just a dps.									
+| 													
+| 													
+| Requirements:												
+|  MQ2Cast_Spell_Routines.inc										
+|  devMovement.inc
+|  devCommonPremium.inc											
+|  warriorBotSettings.ini (you can create custom INIs nameing them warriorBotSettings_name.ini)
+|  Taunt and any abilities you use must have a hotkey set on the Actions window combat or abilities page.		
+|  PLUGIN: MQ2Cast
+|  PLUGIN: MQ2Debuffs													
+|  PLUGIN: MQ2Exchange
+| 
+| v1.10 Update Notes
+|  -Added some distance checks to the combat target selection to prevent warrior from running off after targets really
+|   far away after death or evac.
+| 
+| v1.09 Update Notes
+|  -Added ability to combat npc pets
+| 
+| v1.08 Update Notes
+|  -Converted to global pull routine
+| 
+| v1.07 Update Notes
+|  -Updated to recognize and attack NPC pets
+|  -Added MMOBugs targeting range detection in pull routine
+| 
+| v1.06 Update Notes
+|  -Added EnduranceDisc settings to [Warrior_General] section (Will only use EnduranceRestTo if
+|    in pull mode)
+|  -Updated pull ready to check to fix NetBots.CanCast error for watch list members
+| 
+| v1.05 Update Notes
+|  -Updated pull routine to not target mob to check for HPs until it gets closer, and also checks for
+|    unfriend PCs withing a radius of 50 of the mob before going to pull it.
+|  -Changed maximum item / spell range to 180 to accomadate new default /target distance
+| 
+| v1.04 Update Notes
+|  -Updated pull routine to check endurance
+| 
+| v1.03 Update Notes
+|  -Added StayBehind support when in dps mode, or offtank mode and not tanking
+|  -Fixed pull routine to recognize a dead tank merc
+| 
+| v1.02 Update Notes
+|  -Added fartaunt as a pulling option
+| 
+| v1.01 Update Notes
+|  -Fixed pulling routine to be able to take dead mercs into account
+| 
+| =================================================================================================
+
+#include devCommonPremium.inc
+|#include warriorBotSettings.ini
+
+#event failedTaunt "You have failed to taunt your target."
+#event failedTaunt "You are too far away from your target to taunt."
+
+Sub main(string iniNameStr, string groupRoleStr)
+	/declare meVersion								float outer 1.10
+	/declare myName										string outer warriorbot
+	/declare myClass									string outer WAR
+	/declare groupRoleSet							bool outer FALSE
+	
+	/squelch /mqlog clear
+	/call CommonInit
+	/varset reqCommon 2.36
+	/varset reqMovement 1.65
+	/varset debugMode FALSE
+	
+	/call EchoLog "WarriorBot v${meVersion} Initialized" TRUE
+	/call EchoLog "Loading variables..." TRUE
+	/if (!${Defined[iniNameStr]}) {
+		/varset iniName warriorBotSettings.ini
+	} else {
+		/if (${iniNameStr.NotEqual[default]}) {
+			/varset iniName warriorBotSettings_${iniNameStr}.ini
+		} else {
+			/varset iniName warriorBotSettings.ini
+		}
+	}
+	/if (${Defined[groupRoleStr]}) {
+		/varset groupRoleSet TRUE
+		/varset groupRole ${groupRoleStr}
+	} else {
+		/varset groupRoleSet FALSE
+	}
+
+	/call LoadSettings
+	
+	:mainLoop
+		/doevents
+		/call CombatCheck
+		/call HealthCheck
+
+		/if (!${inCombat} && !${followMode}) {
+			/if (!${minBuffCheckTimer}) /call buffCheck
+			/call CommonRoutines FALSE
+			/if (${Me.PctEndurance} < ${enduranceDiscPct} && ${Me.CombatAbilityReady[${enduranceDisc}]}) {
+				/doability "${enduranceDisc}"
+				/delay 5 ${Me.Casting.ID}
+				:endCast
+				/if (${Me.Casting.ID}) /goto :endCast
+				/delay 2
+				:enduranceLoop
+					/doevents
+					/if (!${Me.Sitting} && ${outOfCombatSit} && !${Me.Mount.ID}) /sit on
+				/if (${Me.PctEndurance} < ${enduranceDiscRestTo} && ${pullMode}) /goto :enduranceLoop
+			}
+			
+			/call CommonRoutines
+			| /if (${pullMode}) /call PullRoutine
+		} else /if (${inCombat}) {
+			/if (${followMode}) /squelch /stick off
+			/call Combat
+			/if (${pullMode}) /varset pullTimer ${pullRestTime}
+			/if (${followMode}) {
+				/squelch /target ID ${followTargID}
+				/delay 1s ${Target.ID}==${followTargID}
+				/if (${Target.ID} && ${Target.ID}==${followTargID}) {
+					/squelch /stick hold 10
+				} else {
+					/call EchoLog "\ayThe follow target, \ag${followTarg} \aocould not be found again after combat, disabling follow mode."
+					/call SetHome
+					/call EchoLog "\ayCamp location reset to current location."
+					/varset followMode FALSE
+				}
+			}
+		} 
+
+		/if (${Zone.ShortName.NotEqual[${startZone}]}) {
+			/call EchoLog "\arI am not in \ag${startZone} \aranymore, I must have died.  Will wait to see if I get rezzed"
+			/call WaitForRez
+		}
+		/if (${Me.Moving}) /varset sitTimer 3s
+		/if (${outOfCombatSit} && !${Me.Sitting} && !${followMode} && !${lTargCount} && !${sitTimer} && !${Me.Moving} && !${inCombat}) /sit on
+		/if (${groupRole.Equal[maintank]} && ${mainTank.NotEqual[${Me.CleanName}]}) /varset groupRole offtank
+		/if (${groupRole.NotEqual[maintank]} && ${mainTank.Equal[${Me.CleanName}]}) /varset groupRole maintank		
+	/goto :mainLoop
+/return
+
+Sub Combat
+	/declare cMem					bool local FALSE
+	/declare highPriority	int local 0
+	/declare looseMobCount	int local 0
+	/declare discAggroTimer	timer local 0s
+	/declare looseMobReset	timer local 0s
+	/declare behindCheck		timer local 0s
+	:combatLoop
+		/doevents
+		/call AddCheck
+		/call CombatCheck FALSE
+		/if (${newAddID}) /call timer mezCheck ${newAddID} 3s
+		
+		/if (${inCombat}) {		
+			/call HealthCheck
+			/call CommonCombatRoutines
+			/if (${groupRole.Equal[dps]}) {
+				/if (${mainAssist.NotEqual[${Me.CleanName}]}) {
+					/call GetMATarget
+					/if (${Target.ID}!=${maTargetID}) {
+						/assist ${mainAssist}
+						/delay 1s ${Target.ID}==${maTargetID}
+					}
+				} else {
+					/if (${lTargCount} && (!${Target.ID} || (${Target.Type.NotEqual[NPC]} && (${Target.Type.NotEqual[Pet]} || ${Target.Master.Type.Equal[PC]})) || ${Target.Distance} > ${campRadius})) {
+						| Need to choose a target
+						/varset targID 0
+						/for nArray 1 to ${targCount}
+							/if (${Spawn[${targArray[${nArray}]}].ID} && (${Spawn[${targArray[${nArray}]}].Type.Equal[NPC]} || (${Spawn[${targArray[${nArray}]}].Type.Equal[Pet]} && ${Spawn[${targArray[${nArray}]}].Master.Type.NotEqual[PC]})) && ${Spawn[${targArray[${nArray}]}].Distance} < ${campRadius}) {
+								/varset targID ${targArray[${nArray}]}
+								/squelch /target ID ${targArray[${nArray}]}
+								/delay 1s ${Target.ID}==${targArray[${nArray}]}
+							}
+						/if (!${targID}) /next nArray
+					}
+				}
+			} else /if (${groupRole.Equal[offtank]}) {
+				/if (${Spawn[${mainTank}].ID} && ${Spawn[${mainTank}].Type.NotEqual[Corpse]}) {
+					/call GetMATarget
+					/call GetMTTarget
+					
+					/if (${lTargCount} > 1 && (!${Target.ID} || ${Target.ID}==${maTargetID} || (${Target.Type.NotEqual[NPC]} && (${Target.Type.NotEqual[Pet]} || ${Target.Master.Type.Equal[PC]})))) {
+						| Need to choose either a target to offtank, or assist the ma, or use targID
+						/varset targID 0
+						/for nArray 1 to ${targCount}
+							/if (${targArray[${nArray}]}!=${mtTargetID}) {
+								| Check to see if target is mezzed or if it's not attacking the MT
+								/call MezCheck ${targArray[${nArray}]}
+								/if (${Macro.Return.Equal[FALSE]}) {
+									/if (${Me.Combat}) /attack off
+									/squelch /target ID ${targArray[${nArray}]}
+									/delay 1s ${Target.ID}==${targArray[${nArray}]}
+									/if (${Me.LAHoTT} && ${Group.GroupSize} >= 3) {
+										/if (${Me.TargetOfTarget.ID}!=${Spawn[${mainTank}].ID}) /varset targID ${Target.ID}
+									} else {
+										/call AggroCheckTarg ${Target.ID}
+										/if (${Macro.Return.Equal[FALSE]}) {
+											/varset targID ${Target.ID}
+										}
+									}
+								}
+							}
+						/if (!${targID}) /next nArray
+					}
+				} else {
+					/goto :mainTankTarget
+				}
+			} else {
+				:mainTankTarget
+				/if (${mainAssist.NotEqual[${Me.CleanName}]}) {
+					/call GetMATarget
+				} else {
+					/varset maTargetID ${Target.ID}
+				}
+				/if (${lTargCount} && (!${Target.ID} || (${Target.Type.NotEqual[NPC]} && (${Target.Type.NotEqual[Pet]} || ${Target.Master.Type.Equal[PC]})))) {
+					/if (${maTargetID} && ${Math.Distance[${Spawn[${maTargetID}].Y},${Spawn[${maTargetID}].X}:${homeY},${homeX}]} && < ${campRadius} && (${Spawn[${maTargetID}].Type.Equal[NPC]} || (${Spawn[${maTargetID}].Type.Equal[Pet]} && ${Spawn[${maTargetID}].Master.Type.NotEqual[PC]}))) {
+						/varset targID ${maTargetID}
+					} else {
+						/varset targID 0
+						/for nArray 1 to ${targCount}
+							/if (${Spawn[${targArray[${nArray}]}].Distance} < ${campRadius} && ${Math.Distance[${Spawn[${targArray[${nArray}]}].Y},${Spawn[${targArray[${nArray}]}].X}:${homeY},${homeX}]} < ${campRadius} && (${Spawn[${targArray[${nArray}]}].Type.Equal[NPC]} || (${Spawn[${targArray[${nArray}]}].Type.Equal[Pet]} && ${Spawn[${targArray[${nArray}]}].Master.Type.NotEqual[PC]}))) {
+								/call MezCheck ${targArray[${nArray}]}
+								/if (${Macro.Return.Equal[FALSE]}) {
+									/varset targID ${targArray[${nArray}]}
+								}
+							}
+						/if (!${targID}) /next nArray
+						/if (!${targID} && ${namedCount}) {
+							/for nArray 1 to ${targCount}
+								/if (${Spawn[${targArray[${nArray}]}].Distance} < ${campRadius} && ${Math.Distance[${Spawn[${targArray[${nArray}]}].Y},${Spawn[${targArray[${nArray}]}].X}:${homeY},${homeX}]} < ${campRadius} && (${Spawn[${targArray[${nArray}]}].Type.Equal[NPC]} || (${Spawn[${targArray[${nArray}]}].Type.Equal[Pet]} && ${Spawn[${targArray[${nArray}]}].Master.Type.NotEqual[PC]})) && ${Spawn[${targArray[${nArray}]}].Name.Left[1].Equal[#]}) {
+									/varset targID ${targArray[${nArray}]}
+								}								
+							/if (!${targID}) /next nArray
+						}
+						/if (!${targID}) {
+							/for nArray 1 to ${targCount}
+								/if (${Spawn[${targArray[${nArray}]}].Distance} < ${campRadius} && ${Math.Distance[${Spawn[${targArray[${nArray}]}].Y},${Spawn[${targArray[${nArray}]}].X}:${homeY},${homeX}]} < ${campRadius} && (${Spawn[${targArray[${nArray}]}].Type.Equal[NPC]} || (${Spawn[${targArray[${nArray}]}].Type.Equal[Pet]} && ${Spawn[${targArray[${nArray}]}].Master.Type.NotEqual[PC]}))) {
+									/varset targID ${targArray[${nArray}]}
+								}
+							/if (!${targID}) /next nArray
+						}
+					}
+				} else /if (${lTargCount} > 1) {
+					/varset targID ${Target.ID}
+					/varset highPriority 0
+					/call AggroCheckTarg ${targID} 1
+					/if (${Macro.Return.Equal[FALSE]}) /varset highPriority ${aggroPriority[1]}
+					/for nArray 1 to ${targCount}
+						/if (${Math.Distance[${Spawn[${targArray[${nArray}]}].Y},${Spawn[${targArray[${nArray}]}].X}:${homeY},${homeX}]} < ${campRadius} && (${Spawn[${targArray[${nArray}]}].Type.Equal[NPC]} || (${Spawn[${targArray[${nArray}]}].Type.Equal[Pet]} && ${Spawn[${targArray[${nArray}]}].Master.Type.NotEqual[PC]})) && ${targArray[${nArray}]}!=${targID} && (!${Defined[aggroDelay${targArray[${nArray}]}]} || !${aggroDelay${targArray[${nArray}]}})) {
+							/call AggroCheckTarg ${targArray[${nArray}]} ${nArray}
+							/if (${Macro.Return.Equal[FALSE]}) {
+								/call MezCheck ${targArray[${nArray}]}
+								/if (${Macro.Return.Equal[FALSE]}) {
+									/if (${Defined[delayClean${targArray[${nArray}]}]}) /varset delayClean${targArray[${nArray}]} 5s
+									/if (!${Defined[aggroDelay${targArray[${nArray}]}]}) {
+										/call EchoLog "Loose mob detected: ${Spawn[${targArray[${nArray}]}].CleanName} | ${targArray[${nArray}]} | AGGRO PRIORITY: ${aggroPriority[${nArray}]}" TRUE
+										/declare aggroDelay${targArray[${nArray}]}		timer local ${aggroDelayStr}
+										/if (${Spawn[${targArray[${nArray}]}].Name.Left[1].Equal[#]}) /varset aggroDelay${targArray[${nArray}]} 0s
+										/if (${aggroDelay${targArray[${nArray}]}}) /call EchoLog ".....Waiting ${aggroDelayStr} to attempt to aggro" TRUE
+									}
+									/if (${aggroPriority[${nArray}]} > ${highPriority} && !${aggroDelay${targArray[${nArray}]}}) {
+										/varset targID ${targArray[${nArray}]}
+										/varset highPriority ${aggroPriority[${nArray}]}
+									}
+								} else {
+									/if (${Defined[aggroDelay${targArray[${nArray}]}]}) {
+										/if (!${Defined[delayClean${targArray[${nArray}]}]}) /declare delayClean${targArray[${nArray}]} timer local 5s
+										/if (!${delayClean${targArray[${nArray}]}}) {
+											/deletevar aggroDelay${targArray[${nArray}]}
+											/deletevar delayClean${targArray[${nArray}]}
+										}
+									}
+								}
+							} else {
+								/if (${Defined[aggroDelay${targArray[${nArray}]}]}) /deletevar aggroDelay${targArray[${nArray}]}
+							}
+						}
+					/next nArray
+					/varset looseMobCount 0
+					/for nArray 1 to ${targCount}
+						/if (${Defined[aggroDelay${targArray[${nArray}]}]}) /varcalc looseMobCount ${looseMobCount} + 1
+					/next nArray
+					/if (${namedCount} && ${highPriority}==0) {
+						/for nArray 1 to ${targCount}
+							/if (${Math.Distance[${Spawn[${targArray[${nArray}]}].Y},${Spawn[${targArray[${nArray}]}].X}:${homeY},${homeX}]} < ${campRadius} && (${Spawn[${targArray[${nArray}]}].Type.Equal[NPC]} || (${Spawn[${targArray[${nArray}]}].Type.Equal[Pet]} && ${Spawn[${targArray[${nArray}]}].Master.Type.NotEqual[PC]})) && ${Spawn[${targArray[${nArray}]}].Name.Left[1].Equal[#]}) /varset targID ${targArray[${nArray}]}
+						/if (!${targID}) /next nArray						
+					}
+					/if (${Target.ID}==${targID} && ${targID}!=${maTargetID}) {
+						/call AggroCheckTarg ${targID}
+						/if (${Macro.Return.NotEqual[FALSE]}) /varset targID ${maTargetID}
+					}
+				}
+			}
+			/if (${targID} && ${Target.ID}!=${targID}) {
+				/call timer mezCheck ${targID} 2s
+				/if (${groupRole.Equal[maintank]} || (${groupRole.Equal[offtank]} && ${targID}!=${mtTargetID})) {
+					/varset tauntTarg TRUE
+					/varset tankAggro TRUE
+				} else {
+					/varset tauntTarg FALSE
+					/varset tankAggro FALSE
+				}
+				/call MezCheck ${targID}
+				/if (${Me.Combat} && ${Macro.Return.NotEqual[FALSE]}) /attack off
+				/squelch /target ID ${targID}
+				/delay 1s ${Target.ID}==${targID}
+			} else /if (${targID}) {
+				/if (${groupRole.Equal[maintank]} || (${groupRole.Equal[offtank]} && ${targID}!=${mtTargetID} && ${Spawn[${mainTank}].ID} && ${Spawn[${mainTank}].Type.NotEqual[Corpse]})) {
+					/call AggroCheckTarg ${targID}
+					/if (${Macro.Return.Equal[FALSE]}) {
+						/varset tauntTarg TRUE
+						/varset tankAggro TRUE
+					} else {
+						/varset tauntTarg FALSE
+					}s
+				} else /if (${groupRole.Equal[offtank]} && ${targID}==${mtTargetID} && ${Spawn[${mainTank}].ID} && ${Spawn[${mainTank}].Type.NotEqual[Corpse]}) {
+					/varset tauntTarg FALSE
+					/varset tankAggro FALSE
+				}
+			}
+
+			/if (${Target.ID} && ${Defined[aggroDelay${Target.ID}]}) {
+				/deletevar aggroDelay${Target.ID}
+				/if (${Defined[delayClean${Target.ID}]}) /deletevar delayClean${Target.ID}
+			}
+			/if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[Pet]} && ${Target.Master.Type.NotEqual[PC]})) && ${Target.Distance} < ${campRadius} && (${Math.Distance[${Target.Y},${Target.X}:${homeY},${homeX}]} < ${campRadius} || ${Target.Fleeing} || ${Target.PctHPs} < 20) && (${Target.PctHPs} < ${assistPct} || ${groupRole.Equal[maintank]} || ${groupRole.Equal[mainassisttank]} || (${groupRole.Equal[offtank]} && ${Target.ID}!=${mtTargetID}))) {
+				/if (${Target.Distance} > 15)	/call MoveToSpawn ${Target.ID} 12 TRUE
+				/if (${Target.ID} && ${Math.Abs[${Math.Calc[${Target.HeadingTo.Degrees} - ${Me.Heading.Degrees}]}]} > 10) /face nolook
+				/if (${Target.Distance} < 5) {
+					/keypress back hold
+					/delay 2
+					/keypress back
+				}
+				/if (${stayBehind} && !${Stick.Behind} && !${behindCheck} && (${groupRole.Equal[dps]} || (${groupRole.Equal[offtank]} && !${tauntTarg}))) {
+					/squelch /stick behind ${Target.Distance}
+					/varset behindCheck 10s
+				} else /if (${Stick.Status.Equal[ON]} && ${Stick.Behind}) {
+					/squelch /stick off
+				}				
+				/if (!${Me.Combat}) /attack on
+				
+				/if (${caCount}) {
+					/for nArray 1 to ${caCount}
+						/if (${caName[${nArray}].NotEqual[NULL]}) {
+							/if ((!${Defined[caTimer${nArray}]} || !${caTimer${nArray}}) && (${Me.CombatAbilityReady[${caName[${nArray}]}]} || ${Me.AbilityReady[${caName[${nArray}]}]})) {
+								/doability "${caName[${nArray}]}"
+								:caCast
+								/if (${Me.Casting.ID}) /goto :caCast
+								/if (!${Defined[caTimer${nArray}]}) /declare caTimer${nArray}			timer outer 0s
+								/varset caTimer${nArray} ${caDly[${nArray}]}
+								/goto :exitAbility
+							}
+						}
+					/next nArray
+					:exitAbility
+				}
+				
+				/if (${looseMobCount} >= ${aeTauntMobs} && ${aeTauntMobs}) {
+					/if (${useAEBlade} && ${aeBlade.NotEqual[NULL]} && ${Me.CombatAbilityReady[${aeBlade}]}) {
+						/call EchoLog "Using AEBlade: ${aeBlade} - ${looseMobCount} loose mobs" TRUE
+						/doability "${aeBlade}"
+					} else /if (${Me.AltAbilityReady[Enhanced Area Taunt]}) {
+						/call EchoLog "Using Enhanced Area Taunt - ${looseMobCount} loose mobs" TRUE
+						/call MQ2Cast "Enhanced Area Taunt" alt
+					} else /if (${Me.AltAbilityReady[Area Taunt]}) {
+						/call EchoLog "Using Area Taunt - ${looseMobCount} loose mobs" TRUE
+						/call MQ2Cast "Area Taunt" alt
+					}
+				}
+				/if (${tauntTarg} && (${groupRole.Equal[maintank]} || ${tankAggro})) {
+					/if (${Me.AbilityReady[Taunt]}) {
+						/doability "Taunt"
+						/varset tauntTarg FALSE
+					} else /if (${discTaunt.NotEqual[NULL]} && ${Me.CombatAbilityReady[${discTaunt}]}) {
+						/doability "${discTaunt}"
+						/varset tauntTarg FALSE
+					}
+				}
+				/if (${discAggro.NotEqual[NULL]} && ${Me.CombatAbilityReady[${discAggro}]} && !${discAggroTimer} && ${Target.PctHPs} > 10) {
+					/doability "${discAggro}"
+					/varset discAggroTimer 30s
+				}s
+				/if (${csCount}) {
+					/if (${groupRole.Equal[mainTank]} || (${groupRole.Equal[offtank]} && ${tankAggro})) {
+						/call CastSpell aggro FALSE
+						/varset cMem FALSE
+					} else /if (${groupRole.Equal[dps]}) {
+						/varset cMem TRUE
+					}
+					/if (!${globalCooldown}) /call CastSpell dps ${cMem}
+					/if (!${globalCooldown}) /call CastSpell ALL ${cMem}
+				}
+			} else /if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[Pet]} && ${Target.Master.Type.NotEqual[PC]})) && ${Math.Distance[${Target.Y},${Target.X}:${homeY},${homeX}]} > ${campRadius}) {
+				/call PositionCheckDefault ${campRadius}
+				/if (${Target.ID} && ${Target.Distance} > ${campRadius}) {
+					/squelch /target clear
+					/varset targID 0
+				}
+			}
+		} else {
+			/varset sitTimer ${Math.Calc[1+${Math.Rand[9]}]}s
+			/return
+		}
+	/goto :combatLoop
+/return
+
+Sub AfterDeath
+
+/return
+
+Sub BotCommands(string rFrom, string rMsg, bool fromEQBC)
+/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/declare hMsg				string local COMPLETED_NOTFOUND
+	/declare rFromID		int local 0
+
+	/varset rFromID ${Spawn[pc ${rFrom}].ID}
+	
+	| ==========================
+	| Bot specific commands
+	| ==========================
+	/declare paramCount								int local
+	/varcalc paramCount ${rMsg.Count[ ]} + 1
+	/declare cParams[${paramCount}]		string local
+	/declare strCommand								string local
+
+	/varset strCommand ${rMsg.Token[1, ]}
+	/if (${paramCount}) {
+		/for nArray 2 to ${paramCount}
+			/varset cParams[${Math.Calc[${nArray}-1]}] ${rMsg.Token[${nArray}, ]}
+		/next nArray
+	}
+
+	/if (${strCommand.Equal[NULL]}) {
+	| =========================
+	| Null command
+	| =========================
+	} else /if (${strCommand.Equal[pull]}) {
+	| ==========================
+	| Pull [pullPath], Toggles pulling on and off, sets the pull path
+	| ==========================		
+		/if (${cParams[1].NotEqual[NULL]}) {
+			/varset pullPath ${cParams[1]}
+			/if (${pullPath.Equal[default]}) /varset pullPath ${Zone.ShortName}
+			/call EchoLog "Attempting to load pull path ${pullPath}..." TRUE
+			/call ReadINIA Path.ini ${pullPath}
+			/if (!${Defined[LocArray]} && ${pullMode}) { 
+				/call EchoLog "\ayUnable to load pull path will try to pull without a path."
+				| /varset pullMode FALSE
+				/varset pullPath NULL
+			} 
+			/call EchoLog "Pull path loaded successfully" TRUE
+		}
+		/if (${pullMode}) {
+			/varset pullMode FALSE
+		} else {
+			/varset pullMode TRUE
+		}
+		/varset hMsg PullMode set to: \ag${pullMode}
+	} else /if (${strCommand.Equal[pullradius]}) {
+	| ==========================
+	| PullRadius <radius>
+	| ==========================		
+		/if (${cParams[1].NotEqual[NULL]}) {
+			/varset pullRadius ${cParams[1]}
+			/varset hMsg Pulling Radius set to: \ag${pullRadius}
+		} else {
+			/varset hMsg You must specify a new radius, CMD: \agPullRadius <Radius>
+		}	
+	} else /if (${strCommand.Equal[epic]}) {
+	| ==========================
+	| Epic - Clicks epic 1.5 or 2.0 if you have it and it dosn't have a timer
+	| ==========================
+		/declare epicTry					int local 0
+		/declare clickTried				bool local FALSE
+		:epicRetry
+		/if (${FindItem[Champion's Sword of Eternal Power].InvSlot} && !${FindItem[Champion's Sword of Eternal Power].Timer}) {
+			/call MQ2Cast "Champion's Sword of Eternal Power" Item 0
+			/varset clickTried TRUE
+		} else /if (${FindItem[Kreljnok's Sword of Eternal Power].InvSlot} && !${FindItem[Kreljnok's Sword of Eternal Power].Timer}) {
+			/call MQ2Cast "Kreljnok's Sword of Eternal Power" Item 0
+			/varset clickTried TRUE
+		}
+		/if (${clickTried}) {
+			/if (${CastResult.NotEqual[CAST_SUCCESS]} && ${epicTry} < 2) {
+				/varcalc epicTry ${epicTry} + 1
+				/goto :epicRetry
+			} else /if (${CastResult.Equal[CAST_SUCCESS]}) {
+				/varset hMsg Epic clicked successfully
+			} else /if (${CastResult.NotEqual[CAST_SUCCESS]} && ${epicTry} >= 2) {
+				/varset hMsg Epic click failed
+			}
+		} else {
+			/varset hMsg Epic is on cool down, could not click
+		}
+	}
+/return ${hMsg}
+
+Sub LoadSettings
+	| ===================================
+	|  Load combat abilities
+	| ===================================
+	/declare caCount							int outer
+	/call GetINIArrayCount ${iniName} CombatAbilities AbilityName NULL
+	/varset caCount ${Macro.Return}
+	/call EchoLog "Loading ${caCount} Combat Abilitie(s)" TRUE
+	/declare caName[${caCount}]		string outer
+	/declare caDly[${caCount}]		string outer
+	
+	/if (${caCount}) {
+		/for nArray 1 to ${caCount}
+			/call GetINISetting ${iniName} CombatAbilities AbilityName${nArray} caName[${nArray}] NULL
+			/call GetINISetting ${iniName} CombatAbilities AbiltyReuse${nArray} caDly[${nArray}] 0s
+			/call EchoLog ".....${nArray} - Name: ${caName[${nArray}]} Reuse Delay: ${caDly[${nArray}]}" TRUE
+		/next nArray
+	}
+	/call GetINISetting ${iniName} CombatAbilities AbilityName${Math.Calc[${caCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} CombatAbilities AbiltyReuse${Math.Calc[${caCount}+1].Int} NULL 0s
+
+
+	| ==================
+	| Load Tank Settings
+	| ==================
+	/call EchoLog "Loading tank settings" TRUE
+	/declare discTaunt							string outer NULL
+	/declare discAggro							string outer NULL
+	/declare aeTauntMobs						int outer 3
+	/declare useAEBlade							bool outer FALSE
+	/declare aeBlade								string outer NULL
+	/declare defenseDisc						string outer TRUE
+	/declare defenseDiscHP					int outer 50
+	/declare defenseNamed						bool outer TRUE
+	/declare secondDefenseDisc			string outer NULL
+	/declare defenseDiscTimer				timer outer 0s
+	/declare aggroDelayStr					string outer 0s
+	
+	/if (!${groupRoleSet}) /call GetINISetting ${iniName} TankSettings GroupRole groupRole dps
+	/call GetINISetting ${iniName} TankSettings AssistPct assistPct 97
+	/call GetINISetting ${iniName} TankSettings TauntDisc discTaunt NULL
+	/call GetINISetting ${iniName} TankSettings AggroDisc discAggro NULL
+	/call GetINISetting ${iniName} TankSettings AETauntMinMobs aeTauntMobs 3
+	/call GetINISetting ${iniName} TankSettings UseAEBlade useAEBlade FALSE
+	/call GetINISetting ${iniName} TankSettings DefensiveDisc defenseDisc NULL
+	/call GetINISetting ${iniName} TankSettings SecondDefensiveDisc secondDefenseDisc NULL
+	/call GetINISetting ${iniName} TankSettings DefensiveHP defenseDiscHP 50
+	/call GetINISetting ${iniName} TankSettings DefensiveOnNamed defenseNamed TRUE
+	/call GetINISetting ${iniName} TankSettings LooseMobAggroDelay aggroDelayStr 0s
+	
+	/if (${Me.CombatAbility[Vortex Blade]}) /varset aeBlade ${Me.CombatAbility[${Me.CombatAbility[Vortex Blade]}]}
+	/if (${Me.CombatAbility[Maelstrom Blade]}) /varset aeBlade ${Me.CombatAbility[${Me.CombatAbility[Maelstrom Blade]}]}
+	
+	/call EchoLog ".....GROUPROLE: ${groupRole} MAINASSIST: ${mainAssist} MAINTANK: ${mainTank} ASSISTPCT: ${assistPct} AGGROCHECKTIMER: ${aggroCheckTimerStr}" TRUE
+	/call EchoLog ".....TAUNTDISC: ${discTaunt} AGGRODISC: ${discAggro} AETAUNTMOBS: ${aeTauntMobs} USEAEBLADE: ${useAEBlade} AEBLADE: ${aeBlade}" TRUE
+	/call EchoLog ".....DEFENSEDISC: ${defenseDisc} HP: ${defenseDiscHP} NAMED: ${defenseNamed}" TRUE
+
+	| ==================
+	| Load General Settings
+	| ==================
+	/call EchoLog "Loading general settings" TRUE
+	/declare stayBehind						bool outer FALSE
+
+	/call GetINISetting ${iniName} General StayBehind stayBehind TRUE
+
+	| ==================	
+	| Set default aggro priorities
+	| ==================
+	/call GetINISetting ${iniName} TankSettings ClrAggroPriority NULL 10
+	/call GetINISetting ${iniName} TankSettings ShmAggroPriority NULL 7
+	/call GetINISetting ${iniName} TankSettings DruAggroPriority NULL 8
+	/call GetINISetting ${iniName} TankSettings WizAggroPriority NULL 6
+	/call GetINISetting ${iniName} TankSettings MagAggroPriority NULL 5
+	/call GetINISetting ${iniName} TankSettings EncAggroPriority NULL 9
+
+	| ==================	
+	| Load Warrior_General
+	| ==================	
+	/declare enduranceDisc				string outer NULL
+	/declare enduranceDiscPct			int outer 50
+	/declare enduranceDiscRestTo			int outer 90
+
+	/call GetINISetting ${iniName} Warrior_General EnduranceDisc enduranceDisc "${enduranceDisc}"
+	/call GetINISetting ${iniName} Warrior_General EnduranceDiscPct enduranceDiscPct ${enduranceDiscPct}
+	/call GetINISetting ${iniName} Warrior_General EnduranceDiscRestTo enduranceDiscRestTo ${enduranceDiscRestTo}
+	
+	| ==================	
+	| Finish Loading
+	| ==================
+	/declare activeTanking	int outer
+	/declare tauntTarg			bool outer
+	/declare tankAggro			bool outer
+	/declare gateTargWait		timer outer 0s
+	/declare gateTarg				bool outer FALSE
+	/declare movingToward		bool outer FALSE
+	/declare aggroPriority[1000]	int outer 
+	
+	/call CommonLoad
+		
+	/varset targID 0
+	/varset startZone ${Zone.ShortName}
+	/varset minSafeDistance 0
+
+	/if (${groupRole.NotEqual[maintank]} && ${groupRole.NotEqual[mainassisttank]} && ${groupRole.NotEqual[dps]} && ${groupRole.NotEqual[offtank]}) {
+		/call EchoLog "GroupRole in the ini is not recognized, defaulting to \agDPS"
+		/varset groupRole DPS
+	}
+	/if (${groupRole.Equal[maintank]}) /varset mainTank ${Me.CleanName}
+	/if (${groupRole.Equal[mainassisttank]}) {
+		/varset mainTank ${Me.CleanName}
+		/varset mainAssist ${Me.CleanName}
+	}	
+	
+	/call EchoLog "WarriorBot \agv${meVersion}\ao, written by \awDevestator\ao, initiated"
+	/call EchoLog "Looting Corpses: \ag${lootCorpses}"
+	/call EchoLog "Main Assist: \ag${mainAssist}"
+	/call EchoLog "Main Tank: \ag${mainTank}"
+	/call EchoLog "Group Role: \ag${groupRole}"
+	/call EchoLog "INI FileName: \ag${iniName}"
+
+	/delay 1s
+	/doevents
+/return
+
+Sub AddCheck
+	/declare gLoop		int local
+	/if (!${Defined[chooseTarg]}) /declare chooseTarg bool local TRUE
+	
+	/if (${Group.Members}) {
+		/for gLoop 0 to ${Group.Members}
+			/if (${Group.Member[${gLoop}].LineOfSight} && ${Group.Member[${gLoop}].Distance} < ${Math.Calc[${campRadius} * 2]}) {
+				/call CheckForAdds ${campRadius} ${Group.Member[${gLoop}].ID} FALSE
+				/if (${newAddID}) /return
+			}
+		/next gLoop
+	} else {
+		/call CheckForAdds ${campRadius} ${Me.ID} FALSE
+	}
+/return
+
+Sub MezCheck(int mobID)
+	/declare retValue					bool local TRUE
+	
+	/call timer mezCheck ${mobID}
+	/if (${Macro.Return.Equal[TRUE]}) /return ${retValue}
+	
+	/if (${Spawn[${vID}].Moving}) {
+		/call EchoLog "${Spawn[${mobID}].CleanName} | ${mobID} does not seem to be mezzed because it's moving" TRUE
+		/varset retValue FALSE
+	} else /if (!${Select[${Spawn[${mobID}].Animation}, 26, 32, 71, 72, 110, 111]}) {
+	 	/call EchoLog "${Spawn[${mobID}].CleanName} | ${mobID} does not seem to be mezzed based on it's animation" TRUE
+	 	/varset retValue FALSE
+	}
+/return ${retValue}
+
+Sub HealthCheck
+	/if (${inCombat} && !${defenseDiscTimer}) {
+		/if (${Me.PctHPs}<=${defenseDiscHP} || (${namedCount} && ${defenseNamed})) {
+			/if (${defenseDisc.NotEqual[NULL]} && ${Me.CombatAbilityReady[${defenseDisc}]}) {
+				/doability "${defenseDisc}"
+				/varset defenseDiscTimer ${Spell[${defenseDics}].Duration.TotalSeconds}s
+			} else /if (${secondDefenseDisc.NotEqual[NULL]} && ${Me.CombatAbilityReady[${secondDefenseDisc}]}) {
+				/doability "${secondDefenseDisc}"
+				/varset defenseDiscTimer ${Spell[${secondDefenseDisc}].Duration.TotalSeconds}s
+			}
+		}
+	}
+/return
+
+Sub AggroCheckTarg(int mobID,int targArrayIndex)
+	/if (!${Defined[mobID]}) /return TRUE
+	/if (${Spawn[ID ${mobID}].Type.NotEqual[NPC]} && (${Spawn[ID ${mobID}].Type.NotEqual[Pet]} || ${Spawn[ID ${mobID}].Master.Type.Equal[PC]})) /return TRUE
+	/if (!${Defined[targArrayIndex]}) /declare targArrayIndex		int local 0
+	
+	/declare mobHeading				Float local
+	/declare mobToMeHeading		Float local
+	/declare mobToMeDistance	Float local
+	/declare mobToGroupHead		Float local
+	/declare mobToGroupDist		Float local
+	/declare ctLoop						int local
+	/declare retValue					string local
+	
+	/varset mobHeading ${Spawn[ID ${mobID}].Heading.Degrees}
+	/varset mobToMeHeading ${Spawn[ID ${mobID}].HeadingToLoc[${Me.Y},${Me.X}].Degrees}
+	/varset mobToMeDistance ${Spawn[ID ${mobID}].Distance}
+	/varset retValue TRUE
+	
+	/if (${Math.Abs[${mobHeading} - ${mobToMeHeading}]} > 4) {
+		/varset mobToGroupHead ${Spawn[ID ${mobID}].HeadingToLoc[${Spawn[pc ${mainTank}].Y},${Spawn[pc ${mainTank}].X}].Degrees}
+		/varset mobToGroupDist ${Math.Distance[${Spawn[pc ${mainTank}].Y},${Spawn[pc ${mainTank}].X}:${Spawn[ID ${mobID}].Y},${Spawn[ID ${mobID}].X}]}
+		/if (${Math.Abs[${mobHeading} - ${mobToGroupHead}]} > 4) {
+			
+			| Check group members to see if they have aggro
+			/for ctLoop 1 to ${Group.Members}
+				/varset mobToGroupHead ${Spawn[ID ${mobID}].HeadingToLoc[${Group.Member[${ctLoop}].Y},${Group.Member[${ctLoop}].X}].Degrees}
+				/varset mobToGroupDist ${Math.Distance[${Group.Member[${ctLoop}].Y},${Group.Member[${ctLoop}].X}:${Spawn[ID ${mobID}].Y},${Spawn[ID ${mobID}].X}]}
+				/if (${Math.Abs[${mobHeading} - ${mobToGroupHead}]} < 2 && ${mobToGroupDist} < ${Spawn[${mobID}].MaxRange}) {
+					/varset retValue FALSE
+					/if (${targArrayIndex}) /varset aggroPriority[${targArrayIndex}] ${Ini[${iniName},TankSettings,${Group.Member[${ctLoop}].Class.ShortName}AggroPriority,1]}
+				}
+			/if (${retValue.NotEqual[FALSE]}) /next ctLoop	
+				
+			| Check nearby pcs on safe pc list to see if they have aggro
+			/if (${retValue.NotEqual[FALSE]} && ${safePCCount}) {
+				/for ctLoop 1 to ${safePCCount}
+					/if (${Spawn[${safePC[${ctLoop}]}].ID}) {
+						/varset mobToGroupHead ${Spawn[ID ${mobID}].HeadingToLoc[${Spawn[${safePC[${ctLoop}]}].Y},${Spawn[${safePC[${ctLoop}]}].X}].Degrees}
+						/varset mobToGroupDist ${Math.Distance[${Spaw[${safePC[${ctLoop}]}].Y},${Spawn[${safePC[${ctLoop}]}].X}:${Spawn[ID ${mobID}].Y},${Spawn[ID ${mobID}].X}]}
+						/if (${Math.Abs[${mobHeading} - ${mobToGroupHead}]} < 2 && ${mobToGroupDist} < ${Spawn[${mobID}].MaxRange}) {
+							/varset retValue FALSE
+							/if (${targArrayIndex}) /varset aggroPriority[${targArrayIndex}] ${Ini[${iniName},TankSettings,${Spawn[${safePC[${ctLoop}]}].Class.ShortName}AggroPriority,1]}
+						}
+					}
+				/if (${retValue.NotEqual[FALSE]}) /next ctLoop	
+			}
+			
+			| /call EchoLog "Target ${Spawn[${mobID}].CleanName} | ${mobID} is not on me or the main tank!" TRUE
+			| /varset retValue FALSE
+		}
+	} else {
+		/for ctLoop 1 to ${Group.Members}
+			/varset mobToGroupHead ${Spawn[ID ${mobID}].HeadingToLoc[${Group.Member[${ctLoop}].Y},${Group.Member[${ctLoop}].X}].Degrees}
+			/varset mobToGroupDist ${Math.Distance[${Group.Member[${ctLoop}].Y},${Group.Member[${ctLoop}].X}:${Spawn[ID ${mobID}].Y},${Spawn[ID ${mobID}].X}]}
+			/if (${Math.Abs[${mobHeading} - ${mobToGroupHead}]} < 2 && ${mobToGroupDist} < ${mobToMeDistance}) {
+				/varset retValue FALSE
+				/if (${targArrayIndex}) /varset aggroPriority[${targArrayIndex}] ${Ini[${iniName},TankSettings,${Group.Member[${ctLoop}].Class.ShortName}AggroPriority,1]}
+			}
+		/if (${retValue.NotEqual[FALSE]}) /next ctLoop	
+	}
+	/if (${retValue.NotEqual[FALSE]} && ${targArrayIndex}) /varset aggroPriority[${targArrayIndex}] 1
+/return ${retValue}
+
+Sub Event_failedTaunt
+	/varset tauntTarg TRUE
+/return

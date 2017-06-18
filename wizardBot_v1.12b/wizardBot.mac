@@ -1,0 +1,608 @@
+| =================================================================================================
+| 									   WizardBot v1.12
+| 									Written By: Devestator
+| 													
+| 													
+| USAGE: /macro wizardBot <IniName>
+| 													
+| 													
+| Description:												
+|  This is a bot meant to automate the role of a wizard in a group.							
+| 													
+| 													
+| Requirements:												
+|  MQ2Cast_Spell_Routines.inc										
+|  devMovement.inc
+|  devCommon.inc											
+|  wizardBotSettings.ini (you can create custom INIs nameing them wizardBotSettings_name.ini			
+|  PLUGIN: MQ2Cast
+|  PLUGIN: MQ2Debuffs													
+|  PLUGIN: MQ2Exchange
+| 
+| v1.12 Update Notes
+|  -Corrected a problem with combat routines running even when out of combat
+| 
+| v1.11 Update Notes
+|  -Converted to common target routine
+|  -Added ability to combat pets
+| 
+| v1.10 Update Notes
+|  -Updated burn routine variable to prevent conflicts with devCommonPremium buffs checking
+| 
+| v1.09 Update Notes
+|  -Added a burn routine
+| 
+| v1.08 Update Notes
+|  -Corrected a problem causing the wizard to ignore InCombatSit and OutOfCombatSit settings
+|  -Fixed it so the wizard will assist when combat is encountered while following
+|  -Updated wizard to be able to cast deaggro spell on non main assist targets
+| 
+| v1.07 Update Notes
+|  -Changed some harvest settings to fix an error message
+| 
+| v1.06 Update Notes
+|  -Corrected harvestInCobat typo in load settings
+|  -Corrected missing defaultHarvestMana in LoadSettings
+| 
+| v1.05 Update Notes
+|  -Added timers to harvest spells to prevent them from trying to cast when on cooldown
+| 
+| v1.04 Update Notes
+|  -Removed unnecessary engagePet declare
+| 
+| v1.03 Update Notes
+|  -Updated for HoT
+|  -Updated for devCommonPremium.inc
+| 
+| v1.02 Update Notes
+|  -Corrected crash error when loading harvest spells.
+| 
+| v1.01 Update Notes
+|  -Added a new harvest section to the INI to suppore more than one harvest spell / aa / item
+|   [HarvestSpells] HarvestDefaultMaxMana HarvestSpellN HarvestMaxManaN
+| 
+| ==================================================================================================
+
+
+#include devCommonPremium.inc
+|#include wizardBotSettings.ini
+
+Sub Main(string iniNameStr)
+	/declare meVersion		float outer 1.12
+	/declare myName				string outer wizardbot
+	/declare myClass			string outer WIZ
+	
+	/squelch /mqlog clear
+	
+	/call CommonInit
+	/varset reqCommon	2.36
+	/varset reqMovement  1.60
+	/varset debugMode FALSE
+	
+	/call EchoLog "Wizardbot Initialized" true
+	/call EchoLog "Loading variables..." true
+	/if (!${Defined[iniNameStr]}) {
+		/varset iniName wizardBotSettings.ini
+	} else {
+		/if (!${iniNameStr.Equal[default]}) {
+			/varset iniName wizardBotSettings_${iniNameStr}.ini
+		} else {
+			/varset iniName wizardBotSettings.ini
+		}
+	}
+	
+	/call LoadSettings
+	
+	/varset targCount 0
+	/declare currID						int local
+	/declare resumeFollow			bool local FALSE
+	:mainLoop
+		/doevents
+		/call CombatCheck
+		/call CheckForAggro
+		
+		/if ((!${inCombat} || ${harvestInCombat}) && (!${Me.Invis} || ${castWhileInvis})) /call HarvestCheck
+		
+		/if (${Me.Moving}) /varset sitTimer 3s
+		/if (${allowSit}  && ((${outOfCombatSit} && !${inCombat}) || (${inCombatSit} && ${inCombat})) &&  !${Me.Sitting} && !${sitTimer} && !${Me.Mount.ID} && !${gotAggro} && !${followMode} && !${Me.Casting.ID}) /sit on
+
+		/if (${followMode} && ${inCombat}) {
+			/call SetHome
+			/varset followMode FALSE
+			/varset resumeFollow TRUE
+			/squelch /stick off
+			/call EchoLog "Combat started while following, breaking follow to participate in combat." TRUE
+		} else /if (${resumeFollow} && !${inCombat}) {
+			/squelch /target ID ${followTargID}
+			/delay 2s ${Target.ID}==${followTargID}
+			/if (${Target.ID}==${followTargID} && ${Target.Type.NotEqual[corpse]} && ${Target.Distance} < 200) {
+				/squelch /stick hold 10
+				/varset followMode TRUE
+			} else {
+				/call EchoLog "\ayCould not find follow target to resume following after combat.  Setting home location to current location"
+				/varset followTarg NULL
+				/varset followTargID 0
+				/call SetHome
+			}			
+			/varset resumeFollow FALSE
+		}
+		
+		/if (!${inCombat} && !${followMode}) {
+			/if (!${minBuffCheckTimer}) /call buffCheck
+			/call CommonRoutines
+		} else /if (${inCombat}) {
+			/if (${engagePet} && ${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) {
+				/if (${mainAssist.NotEqual[${Me.CleanName}]}) {
+					/varset currID ${Target.ID}
+					/assist ${mainAssist}
+					/delay 1s ${Target.ID}!=${currID}
+				}
+				/if (${Target.PctHPs} <= ${assistPct}) {
+					/pet attack
+					/varset engagePet false
+				}
+			}
+			/call CommonCombatRoutines
+			/call CommonGetTarget
+			/if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[Pet]} && ${Target.Master.Type.NotEqual[PC]})) && ${Target.PctHPs} < ${assistPct} && ${csCount}) {
+				/if (${burnMode} || ${alwaysBurn}) {
+					/call BurnRoutine
+				} else {
+					/call CastSpell
+					/varset lastTargID ${Target.ID}
+					/call BurnSetConditionCheck
+				}
+			}
+			/call CheckForAggro
+			/if (${Macro.Return}) {
+				/if (${deAggroSpell.NotEqual[NULL]} && ${gotAggroID}) {
+					/squelch /target ID ${gotAggroID}
+					/delay 2s ${Target.ID}==${gotAggroID}
+					/if (${Target.ID}==${gotAggroID} && ${Target.Type.Equal[NPC]}) {
+						/call MQ2Cast "${deAggroSpell}"
+					}
+				}
+			}
+		}
+	/goto :mainLoop
+/return
+
+Sub AfterDeath
+
+/return
+
+Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
+	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/declare hMsg				string local COMPLETED_NOTFOUND
+	/declare rFromID		int local 0
+
+	/varset rFromID ${Spawn[pc ${rFrom}].ID}
+	
+	| ==========================
+	| Bot specific commands
+	| ==========================
+	/declare paramCount								int local
+	/varcalc paramCount ${rMsg.Count[ ]} + 1
+	/declare cParams[${paramCount}]		string local
+	/declare strCommand								string local
+
+	/declare mReturn				string local
+	
+	/varset strCommand ${rMsg.Token[1, ]}
+	/if (${paramCount}) {
+		/for nArray 2 to ${paramCount}
+			/varset cParams[${Math.Calc[${nArray}-1]}] ${rMsg.Token[${nArray}, ]}
+		/next nArray
+	}
+
+	/if (${strCommand.Equal[evac]}) {
+		/if (${Me.AltAbilityReady[Exodus]}) {
+			/call MQ2Cast "Exodus" alt
+		} else {
+			/call Mq2Cast "Evacuate"
+		}
+	} else /if (${strCommand.Equal[burn]}) {
+	| ==========================
+	| Burn [set], toggles burn mode on and off, if [set] is specified will burn the specified set
+	| ==========================		
+		/if (${burnMode} && ${cParams[1].Equal[NULL]}) {
+			/varset burnMode FALSE
+			/varset burnSetID 0
+			/varset burnAlias NULL
+			/varset hMsg Burnmode disabled
+		} else {
+			/varset burnAlias ${cParams[1]}
+			/if (${Math.Calc[${paramCount}-1]} > 1) {
+				/for bcArray 2 to ${Math.Calc[${paramCount}-1]}
+					/varset burnAlias ${burnAlias} ${cParams[${bcArray}]}
+				/next bcArray
+			}
+			/if (${burnAlias.NotEqual[NULL]}) {
+				/call BurnSetReady "${burnAlias}"
+				/varset mReturn ${Macro.Return}
+				/if (${mReturn}) {
+					/varset hMsg Burning set ${burnAlias}
+					/varset burnMode TRUE
+					/varset burnSetID ${mReturn}
+				} else {
+					/varset hMsg Could not burn this set because it is not ready
+					/varset burnAlias NULL
+				}
+			} else {
+				/for burnArray 1 to ${burnSetCount}
+					/call BurnSetReady ${burnArray}
+					/if (${Macro.Return}) /varset burnSetID ${burnArray}
+				/if (!${burnSetID}) /next burnArray
+				/if (${burnSetID}) {		
+					/varset burnMode TRUE
+					/varset hMsg Burnmode Enabled
+				} else {
+					/varset burnMode FALSE
+					/varset hMsg No burn set could be found that was ready to be used.
+				}
+			}
+		}
+	} else /if ((${strCommand.Equal[always]} && ${cParams[1].Equal[burn]}) || ${strCommand.Equal[alwaysburn]}) {
+	| ==========================
+	| Always Burn [set], toggles always burn mode on and off, if [set] is specified will always burn that set
+	| ==========================		
+		/if (${alwaysBurn} && ${cParams[1].Equal[NULL]}) {
+			/varset alwaysBurn FALSE
+			/varset burnSetID 0
+			/varset burnAlias NULL
+			/varset hMsg Always burn disabled
+		} else {
+			/varset burnAlias ${cParams[1]}
+			/if (${Math.Calc[${paramCount}-1]} > 1) {
+				/for bcArray 2 to ${Math.Calc[${paramCount}-1]}
+					/varset burnAlias ${burnAlias} ${cParams[${bcArray}]}
+				/next bcArray
+			}
+			/if (${burnAlias.NotEqual[NULL]}) {
+				/call BurnSetReady "${burnAlias}"
+				/varset mReturn ${Macro.Return}
+				/if (${mReturn}) {
+					/varset hMsg Always burning set ${burnAlias}
+					/varset alwaysBurn TRUE
+					/varset burnSetID ${mReturn}
+				} else {
+					/varset hMsg Could not burn this set because it is not ready
+					/varset burnAlias NULL
+				}
+			} else {
+				/varset alwaysBurn TRUE
+				/varset hMsg Always burn Enabled
+			}
+		}
+	} else /if (${strCommand.Equal[NULL]}) {
+		| ==========================
+		| NULL
+		| ==========================		
+		/varset hMsg COMPLETED_NOTFOUND
+	}	
+/return ${hMsg}
+
+Sub HarvestCheck
+	/if (${Me.PctMana} <= ${harvestManaPct}) {
+		/call CheckForAggro
+		/if (!${gotAggro}) {
+			/if (${useAAHarvest} && ${Me.AltAbilityReady[Harvest of Druzzil]}) {
+				/call MQ2Cast "Harvest of Druzzil"
+			} else /if (${Me.SpellReady[${harvestSpell}]}) {
+				/call MQ2Cast "${harvestSpell}"
+				/if (${CastResult.Equal[CAST_SUCCESS]}) {
+					:harvestWait
+						/doevents
+					/if (${Me.Song[${harvestSpell}].ID}) /goto :harvestWait
+				}
+			}
+		}
+	}
+	/declare hArray									int local
+	
+	/for hArray 1 to 20
+		/if (${harvestSpells[${hArray}].NotEqual[NULL]} && !${harvestTimer${hArray}}) {
+			/if ((${Me.PctMana} < ${harvestMana[${hArray}]}) || (${Me.PctMana} < ${defaultHarvestMana} && ${harvestMana[${hArray}]}==0)) {
+				/call EchoLog "Attempting to use harvest spell: ${harvestSpells[${hArray}]}  Current Mana: ${Me.PctMana}" true
+				/call MQ2Cast "${harvestSpells[${hArray}]}"
+				/if (${CastResult.Equal[CAST_SUCCESS]}) {
+					:harvestWaitOne
+						/doevents
+					/if (${Me.Song[${harvestSpells[${hArray}]}].ID}) /goto :harvestWaitOne
+					/varset harvestTimer${hArray} ${Spell[${harvestSpells[${hArray}]}].RecastTime}s
+				} else /if (${CastResult.Equal[CAST_NOTREADY]}) {
+					/varset harvestTimer${hArray} ${Spell[${harvestSpells[${hArray}]}].RecastTime}s
+				}
+				/goto :harvestCast
+			}
+		}
+	/next hArray
+	:harvestCast
+/return
+
+Sub LoadSettings
+	| ===============================
+	| Load general
+	| ===============================	
+	/declare useAAHarvest										bool outer FALSE
+	/declare harvestSpell										string outer
+	/declare harvestManaPct									int outer 50
+	/declare deAggroSpell										string outer NULL
+	/declare harvestInCombat								bool outer TRUE
+	/declare burnSetLoop										int local 0
+
+	/call GetINISetting ${iniName} General UseAAHarvest useAAHarvest TRUE
+	| /call GetINISetting ${iniName} General HarvestSpell harvestSpell NULL FALSE
+	| /call GetINISetting ${iniName} General HarvestManaPct harvestManaPct 50 FALSE
+	/call GetINISetting ${iniName} General DeAggroSpell deAggroSpell NULL
+	/call GetINISetting ${iniName} General HarvestInCombat harvestInCombat TRUE FALSE
+
+	| ===============================
+	| Load Harvest Spells
+	| ===============================	
+	/declare harvestSpells[20]							string outer NULL
+	/declare harvestMana[20]								int outer
+	/declare harvestCombat[20]							bool outer
+	/declare defaultHarvestMana							int outer
+	
+	/call GetINISetting ${iniName} HarvestSpells HarvestDefaultMaxMana defaultHarvestMana 50
+	/call GetINISetting ${iniName} HarvestSpells HarvestInCombat harvestInCombat ${harvestInCombat}
+	/call EchoLog "Default harvest mana set to: ${defaultHarvestMana}" true
+	/for nArray 1 to 20
+		/if (${Ini[${iniName},HarvestSpells,HarvestSpell${nArray},NULL].NotEqual[NULL]}) {
+			/call GetINISetting ${iniName} HarvestSpells HarvestSpell${nArray} harvestSpells[${nArray}] NULL
+			/call GetINISetting ${iniName} HarvestSpells HarvestMaxMana${nArray} harvestMana[${nArray}] ${defaultHarvestMana} FALSE
+			/declare harvestTimer${nArray}			timer outer 0s
+			/call EchoLog "Harvest spell loaded ${harvestSpells[${nArray}]}, max mana setting: ${harvestMana[${nArray}]}" true
+			/next nArray		
+		} else /if (${nArray} < 21) {
+			/call GetINISetting ${iniName} HarvestSpells HarvestSpell${nArray} harvestSpells[${nArray}] NULL TRUE
+			/call GetINISetting ${iniName} HarvestSpells HarvestMaxMana${nArray} harvestMana[${nArray}] ${defaultHarvestMana} FALSE
+			/varset harvestSpells[${nArray}] NULL
+			/declare harvestTimer${nArray}			timer outer 0s
+		}
+
+	| ===================================
+	|  Load burn
+	| ===================================	
+	/declare burnAlias											string outer NULL
+	/declare burnSetID											int outer 0
+	/declare alwaysBurn											bool outer FALSE
+	/call GetINISetting ${iniName} Burn AlwaysBurn alwaysBurn FALSE
+	/declare burnOneSet											bool outer TRUE
+	/call GetINISetting ${iniName} Burn BurnOneSet burnOneSet TRUE
+	/declare autoBurnCondition							string outer NULL
+	/call GetINISetting ${iniName} Burn AutoBurnCondition autoBurnCondition NULL
+	
+	/declare burnSetCount										int outer 0
+	/call GetINIArrayCount ${iniName} Burn BurnSet NULL
+	/varset burnSetCount ${Macro.Return}
+	/call EchoLog "Loading ${burnSetCount} burn sets" TRUE
+	/declare burnSets[${burnSetCount},2]					string outer
+	/declare burnSetMinHP[${burnSetCount}]				int outer
+	/declare burnSetRequireAll[${burnSetCount}]		bool outer
+	/declare burnSetUseOnce[${burnSetCount}]			bool outer
+	/declare burnSetAbilities[${burnSetCount},20]	string outer NULL
+	/declare burnSetAbilityUsed[${burnSetCount},20]	bool outer
+	/declare burnSetCondition[${burnSetCount}]		string outer NULL
+	/declare burnSetMinMana[${burnSetCount}]	int outer
+	
+	/for nArray 1 to ${Math.Calc[${burnSetCount}+1]}
+		/if (${nArray}<=${burnSetCount}) {
+			/call GetINISetting ${iniName} Burn BurnSet${nArray} burnSets[${nArray},1] NULL
+			/call GetINIArrayCount ${iniName} Burn BurnSet${nArray}Ability NULL
+			/varset burnSets[${nArray},2] ${Macro.Return}
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}MinHP burnSetMinHP[${nArray}] 50
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}RequireAll burnSetRequireAll[${nArray}] TRUE
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}UseOnce burnSetUseOnce[${nArray}] TRUE
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}AutoCondition burnSetCondition[${nArray}] NULL
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}MinMana burnSetMinMana[${nArray}] 25
+			/call GetINIArrayCount ${iniName} Burn BurnSet${nArray}Ability NULL
+			/call EchoLog ".....SET ${nArray}: ${burnSets[${nArray},1]} MIN HP: ${burnSetMinHP[${nArray}]} REQUIRE ALL: ${burnSetRequireAll[${nArray}]}  USE ONCE: ${burnSetUseOnce[${nArray}]} ABILITIES: ${Macro.Return} CONDITION: ${burnSetCondition[${nArray}]}" TRUE
+			/for burnSetLoop 1 to 20
+				/call GetINISetting ${iniName} Burn BurnSet${nArray}Ability${burnSetLoop} burnSetAbilities[${nArray},${burnSetLoop}] NULL
+				/if (${burnSetAbilities[${nArray},${burnSetLoop}].NotEqual[NULL]}) {
+					/call EchoLog "..........SPELL ${burnSetLoop}: ${burnSetAbilities[${nArray},${burnSetLoop}]}" TRUE
+					/next burnSetLoop
+				}
+		} else {
+			/call GetINISetting ${iniName} Burn BurnSet${nArray} NULL NULL
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}MinHP NULL 50
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}RequireAll NULL TRUE
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}UseOnce NULL TRUE
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}AutoCondition NULL NULL
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}MinMana NULL 25
+			/call GetINISetting ${iniName} Burn BurnSet${nArray}Ability1 NULL NULL
+		}
+	/next nArray
+			
+	/call CommonLoad
+	
+	| ===============================
+	| Final Vars
+	| ===============================	
+	| /declare engagePet											bool outer false
+	/declare burnMode							bool outer FALSE
+	/declare lastTargID											int outer 0
+	
+	/call EchoLog "WizardBot \agv${meVersion}\ao, written by \awDevestator\ao, initiated"
+	/call EchoLog "Looting Corpses: \ag${lootCorpses}"
+	/call EchoLog "Main Tank: \ag${mainTank}"
+	/call EchoLog "Main Assist: \ag${mainAssist}"
+	/call EchoLog "Puller: \ag${pullerName}"
+	/call EchoLog "INI FileName: \ag${iniName}"
+	/call EchoLog "Debuffing: \ag${doDebuffs}"
+	/call EchoLog "Group Buffing: \ag${doGroupBuffs}"
+	/if (${doGroupBuffs}) /call EchoLog "Minimum Check Time: \ag${minBuffCheckTimerStr}"
+	/call EchoLog "Self Buffing: \ag${doSelfBuffs}"
+	/if (${doAnnounce}) {
+		/call EchoLog "Announcements: \ag${announceChan}"
+	} else {
+		/call EchoLog "Announcements: \agOFF"
+	}
+/return
+
+Sub WizardCombatCheck
+	/call CheckForAdds ${campRadius} ${Me.ID} false true
+	/if (!${inCombat} && (${lTargCount} > 0 || ${Me.CombatState.Equal[Combat]})) {
+		/varset inCombat true
+		/varset minBuffCheckTimer 10s
+		/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) /varset engagePet true
+	}
+	/if (${inCombat} && ${lTargCount} < 1 && ${Me.CombatState.NotEqual[Combat]}) {
+		/varset inCombat false
+		/call AfterCombatRoutines
+		/varset targCount 0
+		/varset corpseCount 0
+		/varset lTargCount 0
+		/varset engagePet false
+		/if (${minBuffCheckTimer} < 150) /varset minBuffCheckTimer 15s
+	}		
+/return
+
+Sub BurnRoutine
+	/if (!${burnSetCount}) /return
+	/declare burnArray				int local 0
+	
+	/if (!${burnSetID}) {
+		/for burnArray 1 to ${burnSetCount}
+			/call BurnSetReady ${burnArray}
+			/if (${Macro.Return.Equal[TRUE]}) /varset burnSetID ${burnArray}
+		/if (!${burnSetID}) /next burnArray
+	} else /if (${burnSetUseOnce[${burnSetID}]}) {
+		/call BurnSetUsed ${burnSetID}
+		/if (${Macro.Return.Equal[TRUE]}) {
+			/call EchoLog "\agThe burn set ${burnSets[${burnSetID},1]} has been fully used."
+			/varset burnSetID 0
+			/if (!${alwaysBurn} && (${burnOneSet} || ${burnAlias.NotEqual[NULL]})) {
+				/call EchoLog "\ayBurnOneSet is enabled or a specific burn set was given, ending burn mode."
+				/varset burnMode FALSE
+				/varset burnAlias NULL
+			}
+		} else {
+		}
+	}
+	
+	/if (${burnSetID}) {
+		/for burnArray 1 to 20
+			/if (${burnSetAbilities[${burnSetID},${burnArray}].NotEqual[NULL]} && ${Me.PctHPs} > ${burnSetMinHP[${burnSetID}]} && ${Me.PctMana} > ${burnSetMinMana[${burnSetID}]}) {
+				/if (!${burnSetAbilityUsed[${burnSetID},${burnArray}]} || !${burnSetUseOnce[${burnSetID}]}) {
+					/if (${Me.CombatAbilityReady[${burnSetAbilities[${burnSetID},${burnArray}]}]} && !${discTimer}) {
+						/call EchoLog "Attempting to use burn ability [${burnSetAbilities[${burnSetID},${burnArray}]}]" TRUE
+						/doability "${burnSetAbilities[${burnSetID},${burnArray}]}"
+						/varset discTimer ${Spell[${burnSetAbilities[${burnSetID},${burnArray}]}].Duration.TotalSeconds}s
+						/call EchoLog ".....Disc timer set to ${Spell[${burnSetAbilities[${burnSetID},${burnArray}]}].Duration.TotalSeconds}s" TRUE
+						/varset burnSetAbilityUsed[${burnSetID},${burnArray}] TRUE
+					} else /if (${FindItem[${burnSetAbilities[${burnSetID},${burnArray}]}].ID} && !${FindItem[${burnSetAbilities[${burnSetID},${burnArray}]}].Timer}) {
+						/call EchoLog "Attempting to use burn ability [${burnSetAbilities[${burnSetID},${burnArray}]}]" TRUE
+						/call MQ2Cast "${burnSetAbilities[${burnSetID},${burnArray}]}" Item
+						/call EchoLog ".....Ability Result: ${CastResult}" TRUE
+						/if (${CastResult.Equal[CAST_SUCCESS]}) /varset burnSetAbilityUsed[${burnSetID},${burnArray}] TRUE
+					} else /if (${Me.AbilityReady[${burnSetAbilities[${burnSetID},${burnArray}]}]}) {
+						/call EchoLog "Attempting to use burn ability [${burnSetAbilities[${burnSetID},${burnArray}]}]" TRUE
+						/doability "${burnSetAbilities[${burnSetID},${burnArray}]}"
+						/varset burnSetAbilityUsed[${burnSetID},${burnArray}] TRUE
+					} else /if (${Me.AltAbilityReady[${burnSetAbilities[${burnSetID},${burnArray}]}]}) {
+						/call EchoLog "Attempting to use burn ability [${burnSetAbilities[${burnSetID},${burnArray}]}]" TRUE
+						/call MQ2Cast "${burnSetAbilities[${burnSetID},${burnArray}]}" alt
+						/call EchoLog ".....Ability Result: ${CastResult}" TRUE
+						/if (${CastResult.Equal[CAST_SUCCESS]}) /varset burnSetAbilityUsed[${burnSetID},${burnArray}] TRUE
+					} else /if (${Me.Class.CanCast} && ${Me.Book[${burnSetAbilities[${burnSetID},${burnArray}]}]} && ${Me.SpellReady[${burnSetAbilities[${burnSetID},${burnArray}]}]}) {
+						/call EchoLog "Attempting to use burn ability [${burnSetAbilities[${burnSetID},${burnArray}]}]" TRUE
+						/call MQ2Cast "${burnSetAbilities[${burnSetID},${burnArray}]}" gem1
+						/call EchoLog ".....Ability Result: ${CastResult}" TRUE
+						/if (${CastResult.Equal[CAST_SUCCESS]}) /varset burnSetAbilityUsed[${burnSetID},${burnArray}] TRUE
+					}
+				}
+			}
+		/next burnArray		
+	}
+/return
+
+
+Sub BurnSetUsed(burnSet)
+	/if (!${burnSetCount}) /return FALSE
+	/if (!${Defined[burnSet]}) /return FALSE
+	/declare bSetArray					int local 0
+	/declare bAbiArray					int local 0
+	
+	/for bSetArray 1 to ${burnSetCount}
+		/if (${burnSets[${bSetArray},1].Equal[${burnSet}]} || ${bSetArray}==${burnSet}) {
+			/if (${burnSetRequireAll[${bSetArray}]} || ${burnSets[${bSetArray},2]} == 1) {
+				/for bAbiArray 1 to 20
+					/if (${burnSetAbilities[${bSetArray},${bAbiArray}].NotEqual[NULL]} && !${burnSetAbilityUsed[${bSetArray},${bAbiArray}]}) /return FALSE
+				/next bAbiArray
+				/return TRUE
+			}
+		}
+	/next bSetArray	
+/return FALSE
+
+Sub BurnSetReady(burnSet)
+	/if (!${burnSetCount}) /return FALSE
+	/if (!${Defined[burnSet]}) /return FALSE
+	/declare bSetArray					int local 0
+	/declare bAbiArray					int local 0
+	/declare tAbi								string local NULL
+	/declare bID								int local 0
+	/declare burnSetNumber			int local ${burnSet}
+	
+	
+	/for bSetArray 1 to ${burnSetCount}
+		/if (${burnSets[${bSetArray},1].Equal[${burnSet}]} || ${bSetArray}==${burnSetNumber}) {
+			/varset bID ${bSetArray}
+			/if ((${Target.PctHPs} >= ${burnSetMinHP[${bSetArray}]} || !${Target.ID}) && ${Me.PctMana} >= ${burnSetMinMana[${bSetArray}]}) {
+				/if (${burnSetRequireAll[${bSetArray}]} || ${burnSets[${bSetArray},2]} == 1) {					
+					/for bAbiArray 1 to 20
+						/varset tAbi ${burnSetAbilities[${bSetArray},${bAbiArray}]}
+						/if (${tAbi.NotEqual[NULL]}) {
+							/if (${Me.CombatAbility[${tAbi}]} && !${Me.CombatAbilityReady[${tAbi}]}) /return FALSE 
+							/if (${FindItem[${tAbi}].ID} && ${FindItem[${tAbi}].Timer}) /return FALSE
+							/if (${Me.Ability[${tAbi}]} && !${Me.AbilityReady[${tAbi}]}) /return FALSE
+							/if (${Me.AltAbility[${tAbi}]} && !${Me.AltAbilityReady[${tAbi}]}) /return FALSE
+							/if (!${Me.CombatAbility[${tAbi}]} && !${FindItem[${tAbi}].ID} && !${Me.Ability[${tAbi}]} && !${Me.AltAbility[${tAbi}]}) {
+								/call EchoLog "\ayThe burn set ${burnSets[${bSetArray},1]} contains an Ability [${burSetAbilities[${bSetArray},${bAbiArray}]}] that does not appear to exist"
+								/return FALSE
+							}
+							/varset burnSetAbilityUsed[${bSetArray},${bAbiArray}] FALSE
+							/next bAbiArray
+						}
+				} else {
+					/return ${bID}
+				}
+			} else {
+				/return FALSE
+			}
+		}
+	/next bSetArray
+/return ${bID}
+
+Sub BurnSetConditionCheck
+	/if (${burnMode}) /return
+	/declare bSetArray					int local 0
+	
+	/if (${Target.Name.Find[#]}) {
+		/varset TargetNamed TRUE
+	} else {
+		/varset TargetNamed FALSE
+	}
+	/if (${autoBurnCondition.NotEqual[NULL]} && ${${autoBurnCondition}}) {
+		/varset burnSetID 0
+		/varset burnAlias NULL
+		/varset burnMode TRUE
+		/call EchoLog "\ayAuto Burn Condition has been met, initiating burn mode.  Burn sets must still be ready to be used"
+	} else {
+		/for bSetArray 1 to ${burnSetCount}
+			/if (${burnSetCondition[${bSetArray}].NotEqual[NULL]} && ${${burnSetCondition[${bSetArray}]}}) {
+				/call BurnSetReady ${bSetArray} TRUE
+				/if (${Macro.Return}) {
+					/varset burnSetID ${bSetArray}
+					/varset burnAlias ${burnSets[${bSetArray},1]}
+					/varset burnMode TRUE
+					/call EchoLog "\ayAuto burn condition has been met for set ${burnSets[${bSetArray},1]} and it is ready to be used, initiating burn for this set."
+					/return	
+				}
+			}
+		/next bSetArray
+	}
+/return

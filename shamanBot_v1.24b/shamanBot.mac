@@ -1,0 +1,1301 @@
+| =================================================================================================
+| 									   ShamanBot v1.24
+| 									Written By: Devestator
+| 													
+| 													
+| USAGE: /macro shamanBot <IniName>
+| 													
+| 													
+| Description:												
+|  This is a bot meant to automate the role of a shaman in a group.							
+| 													
+| 													
+| Requirements:												
+|  MQ2Cast_Spell_Routines.inc										
+|  devMovement.inc
+|  devCommonPremium.inc											
+|  shamanBotSettings.ini (you can create custom INIs nameing them shamanBotSettings_name.ini			
+|  PLUGIN: MQ2Cast
+|  PLUGIN: MQ2Debuffs													
+|  PLUGIN: MQ2Exchange
+| 
+| v1.24 Update Notes
+|  -Corrected typo on Dimnuitive Companion AA cast, it should not correctly use it to shrink pets if configure to.
+|  -Removed non spell heals (item, discs) from emergency heal usage to avoid problems for now.  To use them would
+|    would require a much more elaborate rewrite of the emergency heal routine, for now just removing them to prevent problems
+|    They can still be used for regular healing, just won't be considered for emergency healing
+|  -Update heal spell gift of mana checking
+| 
+| v1.23 Update Notes
+|  -Updates for MQ2 patch changing spell timers to correct healing
+| 
+| v1.22 Update Notes
+|  -Changed code for Emergency heal timer checks causing a problem due to MQ2 Changes on Spell Timer reporting.
+| 
+| v1.21 Update Notes
+|  -Moved [General] HealCheckTimer=2s to [Priorities] HealPriority=2s, the old location is still supported
+|    for now but is considered deprecated and should not be used.  The setting under [Priorities] will take priority
+|  -Corrected a problem with not readding in CanniSlot info from the INI.
+| 
+| v1.20 Update Notes
+|  -Added a pet attack check at a higher priority in order to send pet in sooner.
+| 
+| v1.19 Update Notes
+|  -Converted to common get target routine
+|  -Added ability to combat pets
+| 
+| v1.18 Update Notes
+|  -Corrected a problem in the shrink routine that would sometimes prevent it from shrinking
+|  -Updated pet handling code to better control the pet
+| 
+| v1.17 Update Notes
+|  -Added missing groupHotTimer declare
+| 
+| v1.16 Update Notes
+|  -Added the command "shrink" to enable / disable shrinking
+|  -Updated pet shrink to insure it targets the pet before casting shrink.
+|  -Corrected a typo causing ShrinkPet setting to go into an INI named $[iniName}.ini
+| 
+| v1.15 Update Notes
+|  -Added an aggro check to the canni routine so that the shaman doesn't canniablize while be beat on
+|  -Fixed missing variable in pet shrink
+|  -Fixed loop bug in group shrink
+|  -Corrected a missing variable in shrink routine
+| 
+| v1.14 Update Notes
+|  -Added the ability to use pet shrink
+|  -Added the ability to shrink group members
+|  -Moved some shaman specific general settings out of [General] and into [Shaman_General], the old
+|    settings in [General] still work for now but they are deprecated
+|  -Corrected a problem with heal spells trying to heal targets out of range in some situations
+| 
+| v1.13 Update Notes
+|  -Added ability to use Virulent Paralysis if it gets aggro [General] VirulentOnAggro=TRUE/FALSE
+| 
+| v1.12 Update Notes
+|  -Misc updates
+| 
+| v1.11 Update Notes
+|  -Removed unneeded engagePet declare
+| 
+| v1.10 Update Notes
+|  -Corrected a bug with Fortified Intervention that would cause the recast timer for any 
+|    intervention spell to be set wrong.
+|  -Corrected a bug with heal cancellations for faster healing spells
+| 
+| v1.09 Update Notes
+|  -Corrected a problem where the bot might attempt to send the pet after a PC that it's healing, bad doggy
+| 
+| v1.08 Update Notes
+|  -Corrected typo in emergency heal routine
+|  -Corrected missing variable in load settings routine
+| 
+| v1.07 Update Notes
+|  -New healing routine, similar to the clericBot2's healing routine
+|  -Now has support for Twin Heal spell, and Group HoTs.
+|  -Made some other various improvements to the shamanBot
+| 
+| v1.06 Update Notes
+|  -Corrected problem with shaman not assisting when following
+| 
+| v1.05 Update Notes
+|  -Added compatability for devCommonPremium.inc
+| 
+| v1.04 Update Notes
+|  -Added support for OutOfCombatSit, InCombatSit, and AllowSit settings in the INI
+| 
+| v1.03 Update Notes
+|  -Added command epic, to force a 1.5 or 2.0 click if it's not on cool down
+| 
+| v1.02 Update Notes
+|  -Made it easier to move the shaman manually if you need to while it's running.
+|  -Updated to support new add clean up routine in devCommon.inc
+| 
+| v1.01 Update Notes
+|  -Corrected a variable error in loading (only effects log nothing else)
+|  -Added the ability to heal pets
+|  -Added the ability to heal watch list members, and their pets.
+|   To heal a pet you should have Pet, Class-Pet, or Name-Pet in the classes list on the heal.
+| 
+| ==================================================================================================
+
+
+#include devCommonPremium.inc
+|#include shamanBotSettings.ini
+
+Sub Main(string iniNameStr)
+	/declare meVersion									float outer 1.24
+	/declare myName											string outer shamanbot
+	/declare myClass										string outer SHM
+	
+	/squelch /mqlog clear
+	
+	/call CommonInit
+	/varset reqCommon	2.36
+	/varset reqMovement  1.60
+	/varset debugMode FALSE
+	
+	/call EchoLog "Shamanbot v${meVersion} Initialized" true
+	/call EchoLog "Loading variables..." true
+	/if (!${Defined[iniNameStr]}) {
+		/varset iniName shamanBotSettings.ini
+	} else {
+		/if (!${iniNameStr.Equal[default]}) {
+			/varset iniName shamanBotSettings_${iniNameStr}.ini
+		} else {
+			/varset iniName shamanBotSettings.ini
+		}
+	}
+	
+	/call LoadSettings
+	
+	/varset targCount 0
+	/declare currID						int local
+	:mainLoop
+		/doevents
+		/call CombatCheck
+		/call CheckForAggro
+		
+		/if (${doHeals} && !${healCheckTimer} && ${healCount} && (!${followMode} || ${inCombat}) && !${Me.Moving}) /call HealCheck
+		/if ((${canniSpell.NotEqual[NULL]} || ${useAACanni}) && !${canniTimer} && !${followMode} && !${Me.Moving}) /call CanniCheck
+		/if (${Me.Moving}) /varset sitTimer 3s
+		
+		/if (!${inCombat} && !${followMode}) {
+			/if ((!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]}) && ${petSummonAtStart}) /call SummonPet
+			/if (!${minBuffCheckTimer}) /call buffCheck
+			/call CommonRoutines
+			/if (${doShrink} && !${shrinkCheckTimer}) /call ShrinkCheck
+			/if (${anyAllowSit} && ${allowSit} && ${outOfCombatSit} && !${Me.Sitting} && !${sitTimer} && !${Me.Mount.ID} && !${gotAggro} && !${Me.Casting.ID}) /sit on
+		} else /if (${inCombat}) {
+			/call CommonGetTarget
+			/if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[Pet]} && ${Target.Master.Type.Equal[NPC]})) && ${Target.PctHPs} < ${assistPct} && ${Target.Distance} <= ${campRadius}) {
+				/if (${Me.Pet.ID} && ${Me.Pet.Following.ID}!=${Target.ID} && !${Me.Pet.Name.Find[familiar]}) /pet attack
+			}
+
+			/if (${virulentOnAggro}) /call VirulentCheck
+			/call CommonCombatRoutines
+
+			/call CommonGetTarget
+			/if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[Pet]} && ${Target.Master.Type.Equal[NPC]})) && ${Target.PctHPs} < ${assistPct} && ${Target.Distance} <= ${campRadius}) {
+				/if (${Me.Pet.ID} && ${Me.Pet.Following.ID}!=${Target.ID} && !${Me.Pet.Name.Find[familiar]}) /pet attack
+				/if (${meleeMobs}) {
+					/if (${Target.Distance} > 15)	/call MoveToSpawn ${Target.ID} 12 TRUE
+					/if (${Target.ID} && ${Math.Abs[${Math.Calc[${Target.HeadingTo.Degrees} - ${Me.Heading.Degrees}]}]} > 10) /face nolook
+					/if (${Target.Distance} < 5) {
+						/keypress back hold
+						/delay 2
+						/keypress back
+					}
+					/if (!${Me.Combat}) /attack on
+				}
+				/if (${csCount}) /call CastSpell
+				/varset lastTargID ${Target.ID}
+			}
+			/if (${anyAllowSit} && ${allowSit} && ${inCombatSit} && !${Me.Sitting} && !${sitTimer} && !${Me.Mount.ID} && !${gotAggro} && !${Me.Casting.ID} && !${followMode}) /sit on
+		}
+	/goto :mainLoop
+/return
+
+Sub AfterDeath
+
+/return
+
+Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
+	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/declare hMsg				string local COMPLETED_NOTFOUND
+	/declare rFromID		int local 0
+
+	/varset rFromID ${Spawn[pc ${rFrom}].ID}
+	
+	| ==========================
+	| Bot specific commands
+	| ==========================
+	/declare paramCount								int local
+	/varcalc paramCount ${rMsg.Count[ ]} + 1
+	/declare cParams[${paramCount}]		string local
+	/declare strCommand								string local
+
+	/varset strCommand ${rMsg.Token[1, ]}
+	/if (${paramCount}) {
+		/for nArray 2 to ${paramCount}
+			/varset cParams[${Math.Calc[${nArray}-1]}] ${rMsg.Token[${nArray}, ]}
+		/next nArray
+	}
+
+	/if (${strCommand.Equal[summon]} && ${cParams[1].Equal[Pet]}) {
+		| ==========================
+		| summon pet
+		| ==========================
+		/if (${Me.Pet.ID} && ${Me.Pet.Name.Find[familiar]}) /pet get lost
+		/if (!${Me.Pet.ID}) {
+			/if (${petSpellName.NotEqual[NULL]}) {
+				/call MQ2Cast "${petSpellName}" ${petSpellSlot}
+				/if (${CastResult.Equal[CAST_SUCCESS]} && ${Me.Pet.ID}) {
+					/varset hMsg Pet has been successfully summoned
+				} else {
+					/varset hMsg Pet summoning failed, reason: ${CastResult}
+				}
+			} else {
+				/varset hMsg No Pet Spell specified in the Ini
+			}
+		} else {
+			/varset hMsg I already have A Pet
+		}
+	} else /if (${strCommand.Equal[heal]}) {
+		| ==========================
+		| heal
+		| ==========================
+		/if (${doHeals}) {
+			/varset doHeals false
+		} else {
+			/varset doHeals true
+		}
+		/varset hMsg Healing set to: \ag${doHeals}
+	} else /if (${strCommand.Equal[epic]}) {
+		| ==========================
+		| Epic - Clicks epic 1.5 or 2.0 if you have it and it dosn't have a timer
+		| ==========================
+		/declare epicTry					int local 0
+		/declare clickTried				bool local FALSE
+		:epicRetry
+		/if (${FindItem[Crafted Talisman of Fates].InvSlot} && !${FindItem[Crafted Talisman of Fates].Timer}) {
+			/call MQ2Cast "Crafted Talisman of Fates" Item 0
+			/varset clickTried TRUE
+		} else /if (${FindItem[Blessed Spiritstaff of the Heyokah].InvSlot} && !${FindItem[Blessed Spiritstaff of the Heyokah].Timer}) {
+			/call MQ2Cast "Blessed Spiritstaff of the Heyokah" Item 0
+			/varset clickTried TRUE
+		}
+		/if (${clickTried}) {
+			/if (${CastResult.NotEqual[CAST_SUCCESS]} && ${epicTry} < 2) {
+				/varcalc epicTry ${epicTry} + 1
+				/goto :epicRetry
+			} else /if (${CastResult.Equal[CAST_SUCCESS]}) {
+				/varset hMsg Epic clicked successfully
+			} else /if (${CastResult.NotEqual[CAST_SUCCESS]} && ${epicTry} > 2) {
+				/varset hMsg Epic click failed
+			}
+		} else {
+			/varset hMsg Epic is on cool down, could not click.
+		}
+	} else /if (${strCommand.Equal[shrink]}) {
+		| ==========================
+		| Shrink <target>
+		| ==========================
+		/if (${cParams[1].Equal[NULL]}) {
+			/if (${doShrink}) {
+				/varset doShrink FALSE
+			} else {
+				/varset doShrink TRUE
+			}
+			/varset hMsg Shrinking has been set to: ${doShrink}
+		} else {
+			/if (${cParams[1].Equal[me]}) /varset cParams[1] ${rFrom}
+			/if (${cParams[1].Equal[pet]}) /varset cParams[1] ${Me.Pet.CleanName}
+			/varset hMsg Shrink cast on ${cParams[1]} copleted.
+			/call ShrinkCheck ${cParams[1]}
+			/if (${Macro.Return.NotEqual[NULL]}) /varset hMsg ${Macro.Return}
+		}
+	} else /if (${strCommand.Equal[NULL]}) {
+		| ==========================
+		| NULL
+		| ==========================		
+		/varset hMsg COMPLETED_NOTFOUND
+	}	
+/return ${hMsg}
+
+Sub CanniCheck
+	/call CheckForAggro
+	/if (${gotAggro}) /return
+	/if (${Me.PctHPs} >= ${canniMinHealth} && ${Me.PctMana} <= ${canniMaxMana}) {
+		/if (${Me.AltAbilityReady[Cannibalization]} && ${useAACanni}) {
+			/call EchoLog "Using Alt Ability Cannnibalization, HPs: ${Me.PctHPs} Mana: ${Me.PctMana}" true
+			/call MQ2Cast "Cannibalization" alt
+			/if (${CastResult.Equal[CAST_SUCCESS]}) /varset canniTimer ${canniTimerStr}
+		} else /if (${Me.SpellReady[${canniSpell}]} && ${canniSpell.NotEqual[NULL]}) {
+			/call EchoLog "Using canni spell: ${canniSpell} HPs: ${Me.PctHPs} Mana: ${Me.PctMana}" true
+			/call MQ2Cast "${canniSpell}" ${canniSlot}
+			/if (${CastResult.Equal[CAST_SUCCESS]}) /varset canniTimer ${canniTimerStr}
+		}
+	}
+/return
+
+Sub CastHeal(int healNum, int healTargID, string hpWatch)
+	/if (!${Defined[healTargID]} || !${healTargID}) /return
+	/declare sMaxTry				int local ${resistTries}
+	/if (!${Defined[hpWatch]}) /declare hpWatch string local EmergencyHeal
+	
+	/if (${Me.Casting.ID} && ${allowInterrupt}) /call Interrupt
+	/varset currHealID ${Spell[${healSpell[${healNum}]}].ID}
+	/varset currHealTarg ${healTargID}
+	/varset duckHealNum 0
+	/varset duckHealName NULL
+	/if (${Spell[${currHealID}].MyCastTime.TotalSeconds} > 5) /varset sMaxTry 1	
+	/if (${Target.ID}!=${healTargID}) {
+		/squelch /target ID ${healTargID}
+		/delay 2s ${Target.ID}==${healTargID}
+	}
+	/call EchoLog "Attempting to heal ${Target.CleanName} with ${healSpell[${healNum}]} | ${Target.PctHPs}" TRUE
+	/call Announce "${healAnnounce[${healNum}]}"
+	:tryCast
+	/if (${Spawn[${healTargID}].Type.Equal[Corpse]}) {
+		/call EchoLog "Heal target has died." TRUE
+		/return
+	}
+	/varset castStart true
+	/call MQ2Cast "${healSpell[${healNum}]}" ${healSlot[${healNum}]} 0 ${hpWatch} -targetid|${healTargID} -maxtries|${sMaxTry}
+	/if (${sMaxTry} == 1 && ${CastResult.Equal[CAST_FIZZLE]}) /goto :tryCast
+	/if (${CastResult.Equal[CAST_SUCCESS]}) {
+		/if (${healPromise[${healNum}]}) /call TrackPromise ${healTargID} ${healNum}
+		/if (${healHoT[${healNum}]}) {
+			/if (${healMinGroup[${healNum}]} > 1) {
+				/if (${healDuration[${healNum}].NotEqual[0s]}) {
+					/varset groupHotTimer ${healDuration[${healNum}]}
+				} else {
+					/varset groupHotTimer ${Math.Calc[${Spell[${currHealID}].Duration.TotalSeconds} + 1]}s
+				}
+			} else {
+				/call TrackHoT ${healTargID} ${healNum}
+			}
+		}
+		/call EchoLog "Heal cast successfull" TRUE
+		/call timer healRecast ${healNum} ${healRecastDly[${healNum}]}
+		/varset healCheckTimer ${healCheckTimerStr}
+	} else /if (${CastResult.Find[CANCELLED]}) {
+		/if (${duckHealNum}) {
+			/call CastHeal ${duckHealNum} ${duckHealTarg} DuckHeal
+		} else /if (${duckHealName.NotEqual[NULL]}) {
+			/if (${duckHealSlot.Equal[Item]} && ${FindItem[${epicName}].InvSlot} != 14) /call ItemSwapCheck "${epicName}"
+			/varset currHealTarg ${Me.ID}
+			/varset currHealID 0
+			/call MQ2Cast "${duckHealName}" ${duckHealSlot} 0 DuckHeal -targetid|${Me.ID} -maxtries|${resistTries}
+			/if (${CastResult.NotEqual[CAST_SUCCESS]}) {
+				/call EchoLog "${duckHealName} cast failed, reason: ${CastResult}" TRUE
+			} else {
+				/call timer healRecast ${duckHealNum} ${healRecastDly[${duckHealNum}]}
+				/call EchoLog "${duckHealName} cast succeeded!" TRUE
+			}
+			/if (${itemSwapped}) /call ItemSwapCheck
+		} else {
+			/call EchoLog "Heal cast failed: ${CastResult}" TRUE
+		}
+	} else {
+		/call EchoLog "Heal cast failed: ${CastResult}" TRUE
+	}
+/return
+
+Sub EmergencyHeal
+	/declare lowHP				int local 100
+	/declare lowID				int local 0
+	/declare eLoop				int local
+	/declare cGroupAvg		int local 100
+	/declare cAvgCount		int local 0
+	
+	/if (${castStart}) {
+		/varset castTimer ${Spell[${currHealID}].MyCastTime.TotalSeconds}s
+		/varset castStart FALSE
+	}
+	/if (!${allowInterrupt}) /return
+	/if (!${Me.Casting.ID}) /return
+	
+	/varset duckHealNum 0
+	/varset duckHealTarg 0
+	/varset duckHealName NULL
+	/varset duckHealSlot NULL
+	
+	/if (((${Spawn[${currHealTarg}].PctHPs} >= 98 && ${castTimer} > 5) || ${Spawn[${currHealTarg}].Type.Equal[Corpse]} || !${Spawn[${currHealTarg}].ID}) && ${allowInterrupt} && !${Spell[${currHealID}].AERange}) {
+		/call EchoLog "The target being healed is either already healed, dead, or not in the zone, canceling heal" TRUE
+		/call Interrupt
+		/return
+	}
+	/for eLoop 0 to ${Group.Members}
+		/if (${Group.Member[${eLoop}].Type.NotEqual[Corpse]} && ${Group.Member[${eLoop}].ID}) {
+			/varcalc cAvgCount ${cAvgCount} + 1
+			/varcalc cGroupAvg ${cGroupAvg} + ${Group.Member[${eLoop}].PctHPs}
+			/if (${classList.Find[${Group.Member[${eLoop}].Class.ShortName}]} && ${Group.Member[${eLoop}].PctHPs} < ${lowHP}) {
+				/varset lowHP ${Group.Member[${eLoop}].PctHPs}
+				/varset lowID ${Group.Member[${eLoop}].ID}
+			}
+		}
+	/next eLoop
+	/if (${cAvgCount}) /varcalc cGroupAvg ${cGroupAvg} / ${cAvgCount}
+
+	/if (${twinHealSpell.NotEqual[NULL]} && !${twinHealTimer} && ${lowHP} < ${twinHealHP} && ${castTimer} > ${Spell[${currHealID}].MyCastTime.TotalSeconds} && (${Spawn[${currHealTarg}].CleanName.NotEqual[${mainTank}]} || ${lowID} == ${Me.ID} || ${lowID} == ${Spawn[${mainTank}].ID})) {
+		/if (${Target.Type.Equal[PC]} && ${Me.TargetOfTarget.Type.NotEqual[NPC]} && ${Spawn[${mainAssist}].ID}) {
+			/squelch /target ID ${Spawn[${mainAssist}].ID}
+			/delay 1s ${Target.ID}==${Spawn[${mainAssist}].ID}
+		}
+		/call Interrupt
+		/call MQ2Cast "${twinHealSpell}"
+		/if (${CastResult.Equal[CAST_SUCCESS]}) {
+			/varset twinHealTimer ${Spell[${twinHealSpell}].RecastTime}s
+			/for eLoop 1 to ${healCount}
+				/if (${healTwinHeal[${eLoop}]}) {
+					/call timer healRecast ${eLoop}
+					/if (!${Macro.Return}) {
+						/varset duckHealNum ${eLoop}
+						/varset duckHealTarg ${lowID}
+						| /call CastHeal ${eLoop} ${lowID} DuckHeal
+						/return
+					}
+				}
+			/next eLoop
+		}
+	}
+	
+	/if (${lowID} != ${currHealTarg} && ${Target.PctHPs} > 50 && ${lowHP} < ${emergencyHP} && ${castTimer} > ${Spell[${currHealID}].MyCastTime.Float} && (${Spawn[${currHealTarg}].CleanName.NotEqual[${mainTank}]} || ${lowID} == ${Me.ID} || ${lowID} == ${Spawn[${mainTank}].ID})) {
+		/call timer healRecast ${fastestHealNum}
+		/if (${Me.Gem[${healSpell[${fastestHealNum}]}]} && !${Macro.Return}) {
+			/call EchoLog "Canceling heal to heal someone that is about to die" TRUE
+			/call Interrupt
+			/varset duckHealNum ${fastestHealNum}
+			/varset duckHealTarg ${lowID}
+			| /call CastHeal ${fastestHealNum} ${lowID} DuckHeal
+			/return
+		} else {
+			/for eLoop 1 to ${healCount}
+				/if (!${healEnabled[${eLoop}]}) /next eLoop
+				/if (!${healSlot[${eLoop}].Find[GEM]}) /next eLoop
+				/if (${Spell[${heallSpell[${eLoop}]}].Duration}) /next eLoop
+				/if (!${Me.Gem[${healSpell[${eLoop}]}]}) /next eLoop
+				/if (${Spell[${healSpell[${eLoop}]}].MyCastTime.Float} > 2) /next eLoop
+				| /if (${healMinGroup[${eLoop}]}>1) /next eLoop
+				/call timer healRecast ${eLoop}
+				/if (!${Macro.Return}) {
+					/if (${healClasses[${eLoop}].Find[${Spawn[${lowID}].Class.ShortName}]}) {
+						/call EchoLog "Canceling heal to heal someone that is about to die" TRUE
+						/call Interrupt
+						/varset duckHealNum ${eLoop}
+						/varset duckHealTarg ${lowID}
+						/return
+					}
+				}
+			/next eLoop
+		}
+	} else {
+		/if (${Target.PctHPs} < ${emergencyHP}) {
+			| /echo >> ${fastestHealNum}
+			/call timer healRecast ${fastestHealNum}
+			/if (${fastestCastTime} < ${Math.Calc[${castTimer} - 2.5]} && ${Me.Gem[${healSpell[${fastestHealNum}]}]} && !${Macro.Return} && ${healSpell[${fastestHealNum}].NotEqual[${Me.Casting.Name}]} && ${Spell[${healSpell[${eLoop}]}].ID}!=${currHealID}) {
+				/call EchoLog "Canceling heal to use a faster heal spell" TRUE
+				/call Interrupt
+				/varset duckHealNum ${fastestHealNum}
+				/varset duckHealTarg ${Target.ID}
+				/return
+			} else {
+				/for eLoop 1 to ${healCount}
+					| /echo >> ${eLoop} - ${healSpell[${eLoop}]} - ${healEnabled[${eLoop}]} - ${Me.Gem[${healSpell[${eLoop}]}]} - ${Spell[${heallSpell[${eLoop}]}].Duration}
+					/if (!${healEnabled[${eLoop}]}) /next eLoop
+					/if (!${healSlot[${eLoop}].Find[GEM]}) /next eLoop
+					/if (!${Me.Gem[${healSpell[${eLoop}]}]}) /next eLoop
+					/if (${Spell[${heallSpell[${eLoop}]}].Duration}) /next eLoop
+					/if (${healSpell[${eLoop}].Equal[${Me.Casting.Name}]} && ${Spell[${healSpell[${eLoop}]}].ID}!=${currHealID}) /next eLoop
+					/call timer healRecast ${eLoop}
+					/echo ${Macro.Return}
+					/if (!${Macro.Return}) {
+						/if (${Spell[${healSpell[${eLoop}]}].MyCastTime.TotalSeconds} < ${Math.Calc[${castTimer} - 2.5]}) {
+							/if (${healClasses[${eLoop}].Find[${Spawn[${currHealTarg}].Class.ShortName}]}) {
+								/call EchoLog "Canceling heal to use a faster heal spell" TRUE
+								/call Interrupt					
+								/varset duckHealNum ${eLoop}
+								/varset duckHealTarg ${Target.ID}
+								/return
+							}
+						}
+					}
+				}
+			/next eLoop
+		}
+	}
+/return
+
+Sub DuckHeal
+	/if (${Spawn[${currHealTarg}].Type.Equal[Corpse]} || !${Spawn[${currHealTarg}].ID}) {
+		/call EchoLog ".....Interrupting current heal because the heal target is dead or no longer in the zone." TRUE
+		/call Interrupt
+	}
+/return
+
+Sub HealCheck(bool secondaryCall)
+	/if (!${healCount}) /return
+	/if (!${Defined[secondaryCall]}) /declare secondaryCall		bool local FALSE
+	/declare hInt					int local 0
+	/declare gPets				bool local false
+	/declare grpArray			int local 0
+	/declare grpHealCount	int local 0
+	/declare grpLowHP			float local 100
+	/declare grpLowHPID		int local -1
+	
+	/if (${Group.Members}) {
+		/for grpArray 0 to ${Group.Members}
+			/if (${Group.Member[${grpArray}].ID} && ${Group.Member[${grpArray}].Type.NotEqual[Corpse]}) {
+				/if ((${Group.Member[${grpArray}].CleanName.NotEqual[${pullerName}]} && ${Group.Member[${grpArray}].Distance3D} <= ${Math.Calc[${campRadius}*2]}) || (${Group.Member[${grpArray}].CleanName.Equal[${pullerName}]} && ${Group.Member[${grpArray}].Distance3D} <= ${campRadius})) {
+					/if (${Group.Member[${grpArray}].PctHPs} < ${grpLowHP}) {
+						/if (${classList.Find[${Group.Member[${grpArray}].Class.ShortName}]} || ${classList.Find[${Group.Member[${grpArray}].Class.Name}]} || ${classList.Find[${Group.Member[${grpArray}].CleanName}]} || ((${classList.Find[mt]} || ${classList.Find[maintank]}) && (${Group.Member[${grpArray}].MainTank} || ${Group.Member[${grpArray}].CleanName.Equal[${mainTank}]}))) {
+							/varset grpLowHP ${Group.Member[${grpArray}].PctHPs}
+							/varset grpLowHPID ${Group.Member[${grpArray}].ID}
+						}
+					}
+					/if (${Group.Member[${grpArray}].Pet.ID}) /varset gPets TRUE
+				}
+			}
+		/next grpArray
+
+		/if (${useGroupHeals} && ${grpLowHP} > ${emergencyHP}) {
+			/for hInt 1 to ${healCount}
+				/if (!${healEnabled[${hInt}]}) /next hInt
+				/if (${healSpell[${hInt}].Equal[NULL]}) /goto :nextGroupHeal
+				/varset grpHealCount 0
+				/if (${healMinGroup[${hInt}]} > 1 && ${Group.GroupSize} > ${healMinGroup[${hInt}]}) {
+					/if (${healHoT[${hInt}]} && ${groupHotTimer}) /goto :nextGroupHeal
+					/if (${healSlot[${hInt}].Equal[Item]} && ${FindItem[${healSpell[${hInt}]}].Timer}) /goto :nextGroupHeal
+					/if (${healSlot[${hInt}].Equal[alt]} && !${Me.AltAbilityReady[${healSpell[${hInt}]}]}) /goto :nextGroupHeal
+					/if (${healGOM[${hInt}]}) {
+						/call HealGoMCheck ${hInt}
+						/if (${Macro.Return.Equal[FALSE]}) /goto :nextGroupHeal
+					}
+					/if (${healSlot[${hInt}].Find[Gem]} && ((${Me.Gem[${healSpell[${hInt}]}]} && !${Me.SpellReady[${healSpell[${hInt}]}]}) || !${Me.Gem[${healSpell[${hInt}]}]}) && ${Spell[${healSpell[${hInt}]}].RecastTime} > 2.5) /goto :nextGroupHeal
+					/if  (${Me.CurrentMana} > ${Spell[${healSpell[${hInt}]}].Mana}) {
+						/call timer healRecast ${hInt}
+						/if (!${Macro.Return}) {
+							/for grpArray 0 to ${Group.Members}
+								/if (${Group.Member[${grpArray}].PctHPs} >= ${healMinHP[${hInt}]} && ${Group.Member[${grpArray}].PctHPs} <= ${healMaxHP[${hInt}]} && ${Group.Member[${grpArray}].Type.NotEqual[Corpse]} && ${Group.Member[${grpArray}].Distance3D}<${Spell[${healSpell[${hInt}]}].Range}) {
+									/if (${healClasses[${hInt}].Find[${Group.Member[${grpArray}].Class.ShortName}]} || ${healClasses[${hInt}].Find[${Group.Member[${grpArray}].Class.Name}]} || ${healClasses[${hInt}].Find[${Group.Member[${grpArray}].CleanName}]} || ((${healClasses[${hInt}].Find[mt]} || ${healClasses[${hInt}].Find[maintank]}) && (${Group.Member[${grpArray}].MainTank} || ${Group.Member[${grpArray}].CleanName.Equal[${mainTank}]}))) {
+										/varcalc grpHealCount ${grpHealCount} + 1
+										/if (${grpHealCount} >= ${healMinGroup[${hInt}]}) {
+											/call CastHeal ${hInt} ${Me.ID}									
+											/return
+										}
+									}
+								}
+							/next grpArray
+						}
+					}
+				}
+				:nextGroupHeal
+			/next hInt
+		}
+	
+		/for hInt 1 to ${healCount}
+			/if (!${healEnabled[${hInt}]}) /next hInt
+			/if (${healSpell[${hInt}].Equal[NULL]}) /goto :nextLowHeal
+			/if (${healMinGroup[${hInt}]} > 1) /goto :nextLowHeal
+			/if (${healGOM[${hInt}]}) {
+				/call HealGoMCheck ${hInt}
+				/if (${Macro.Return.Equal[FALSE]}) /goto :nextLowHeal
+			}			
+			/if (${healPromise[${hInt}]} || ${healHoT[${hInt}]}) {
+				/if (${healPromise[${hInt}]}) /call TrackPromise ${grpLowHPID}
+				/if (${healHoT[${hInt}]}) /call TrackHot ${grpLowHPID}
+				/if (${Macro.Return.Equal[TRUE]}) /goto :nextHeal
+			}
+			/if (${healSlot[${hInt}].Equal[Item]} && ${FindItem[${healSpell[${hInt}]}].Timer}) /goto :nextLowHeal
+			/if (${healSlot[${hInt}].Equal[alt]} && !${Me.AltAbilityReady[${healSpell[${hInt}]}]}) /goto :nextLowHeal
+			/if (${healSlot[${hInt}].Find[Gem]} && ((${Me.Gem[${healSpell[${hInt}]}]} && !${Me.SpellReady[${healSpell[${hInt}]}]}) || !${Me.Gem[${healSpell[${hInt}]}]}) && ${Spell[${healSpell[${hInt}]}].RecastTime} > 2.5) /goto :nextLowHeal
+			/if  (${Me.CurrentMana} > ${Spell[${healSpell[${hInt}]}].Mana}) {
+				/call timer healRecast ${hInt}
+				/if (!${Macro.Return}) {
+					/if (${grpLowHP} <= ${healMaxHP[${hInt}]} && ${grpLowHP} >= ${healMinHP[${hInt}]} && ${Spawn[${grpLowHPID}].Distance3D}<${Spell[${healSpell[${hInt}]}].Range}) {
+						/if (${healClasses[${hInt}].Find[${Spawn[${grpLowHPID}].Class.ShortName}]} || ${healClasses[${hInt}].Find[${Spawn[${grpLowHPID}].Class.Name}]} || ${healClasses[${hInt}].Find[${Spawn[${grpLowHPID}].CleanName}]} || ((${healClasses[${hInt}].Find[mt]} || ${healClasses[${hInt}].Find[maintank]}) && (${Spawn[${grpLowHPID}].CleanName.Equal[${mainTank}]}))) {
+							/call CastHeal ${hInt} ${grpLowHPID}
+							/return
+						}
+					}
+				}
+			}
+			:nextLowHeal
+		/next hInt
+	
+		/for hInt 1 to ${healCount}
+			/if (!${healEnabled[${hInt}]}) /next hInt
+			/if (${healSpell[${hInt}].Equal[NULL]}) /goto :nextHeal
+			/if (${healMinGroup[${hInt}]} > 1) /goto :nextHeal
+			/if (${healSlot[${hInt}].Equal[Item]} && ${FindItem[${healSpell[${hInt}]}].Timer}) /goto :nextHeal
+			/if (${healSlot[${hInt}].Equal[alt]} && !${Me.AltAbilityReady[${healSpell[${hInt}]}]}) /goto :nextHeal
+			/if (${healGOM[${hInt}]}) {
+				/call HealGoMCheck ${hInt}
+				/if (${Macro.Return.Equal[FALSE]}) /goto :nextHeal
+			}						
+			/if (${healSlot[${hInt}].Find[Gem]} && ((${Me.Gem[${healSpell[${hInt}]}]} && !${Me.SpellReady[${healSpell[${hInt}]}]}) || !${Me.Gem[${healSpell[${hInt}]}]}) && ${Spell[${healSpell[${hInt}]}].RecastTime} > 2.5) /goto :nextHeal
+			/if  (${Me.CurrentMana} > ${Spell[${healSpell[${hInt}]}].Mana}) {
+				/call timer healRecast ${hInt}
+				/if (!${Macro.Return}) {				
+					/for grpArray 0 to ${Group.Members}
+						/if (${healPromise[${hInt}]} || ${healHoT[${hInt}]}) {
+							/if (${healPromise[${hInt}]}) /call TrackPromise ${Group.Member[${grpArray}].ID}
+							/if (${healHoT[${hInt}]}) /call TrackHot ${Group.Member[${grpArray}].ID}
+							/if (${Macro.Return.Equal[TRUE]}) /goto :nextHeal
+						}
+						/if (${Group.Member[${grpArray}].PctHPs} <= ${healMaxHP[${hInt}]} && ${Group.Member[${grpArray}].PctHPs} >= ${healMinHP[${hInt}]} && ${Group.Member[${grpArray}].Type.NotEqual[Corpse]}) {
+							/if (((${Group.Member[${grpArray}].CleanName.NotEqual[${pullerName}]} && ${Group.Member[${grpArray}].Distance3D} <= ${Math.Calc[${campRadius}*2]}) || (${Group.Member[${grpArray}].CleanName.Equal[${pullerName}]} && ${Group.Member[${grpArray}].Distance3D} <= ${campRadius})) && ${Group.Member[${grpArray}].Distance3D}<${Spell[${healSpell[${hInt}]}].Range}) {
+								/if (${healClasses[${hInt}].Find[${Group.Member[${grpArray}].Class.ShortName}]} || ${healClasses[${hInt}].Find[${Group.Member[${grpArray}].Class.Name}]} || ${healClasses[${hInt}].Find[${Group.Member[${grpArray}].CleanName}]} || ((${healClasses[${hInt}].Find[mt]} || ${healClasses[${hInt}].Find[maintank]}) && (${Group.Member[${gArray}].MainTank} || ${Group.Member[${gArray}].CleanName.Equal[${mainTank}]}))) {
+									/call CastHeal ${hInt} ${Group.Member[${grpArray}].ID}
+									/return
+								}
+							}
+						}
+					/next grpArray
+				}
+			}
+			:nextHeal
+		/next hInt
+	} else {
+		/varset gPets FALSE
+		/if (!${watchCount}) {
+			/varset secondaryHealCheckTimer 10s
+			/if (${mainTank.NotEqual[NULL]} && ${Spawn[${mainTank}].ID} && ${Spawn[${mainTank}].Distance3D} < ${campRadius}) {
+				/squelch /target ID ${Spawn[${mainTank}].ID}
+				/delay 1s ${Target.ID}==${Spawn[${mainTank}].ID}
+				/if (${Target.Name.Find[familiar]}) {
+					/squelch /target PC ${mainTank}
+					/delay 1s ${Target.Type.Equal[PC]}
+				}
+				/if (${Target.ID} && ${Target.CleanName.Equal[${mainTank}]}) {
+					/for hInt 1 to ${healCount}
+						/if (!${healEnabled[${hInt}]}) /next hInt
+						/if (${healMinGroup[${hInt}]} > 1) /next hInt
+						/if (${healGOM[${hInt}]}) {
+							/call HealGoMCheck ${hInt}
+							/if (${Macro.Return.Equal[FALSE]}) /next hInt
+						}			
+													/if (${healPromise[${hInt}]} || ${healHoT[${hInt}]}) {
+							/if (${healPromise[${hInt}]}) /call TrackPromise ${Target.ID}
+							/if (${healHoT[${hInt}]}) /call TrackHot ${Target.ID}
+							/if (${Macro.Return.Equal[TRUE]}) /next hInt
+						}
+						/if (${healSlot[${hInt}].Equal[Item]} && ${FindItem[${healSpell[${hInt}]}].Timer}) /next hInt
+						/if (${healSlot[${hInt}].Equal[alt]} && !${Me.AltAbilityReady[${healSpell[${hInt}]}]}) /next hInt
+						/if (${healSlot[${hInt}].Find[Gem]} && ${Me.Gem[${healSpell[${hInt}]}]} && !${Me.SpellReady[${healSpell[${hInt}]}]} && ${Spell[${healSpell[${hInt}]}].RecastTime} > 2.5) /next hInt
+						/if  (${Me.CurrentMana} > ${Spell[${healSpell[${hInt}]}].Mana}) {
+							/call timer healRecast ${hInt}
+							/if (!${Macro.Return}) {							
+								/if (${grpLowHP} <= ${healMaxHP[${hInt}]} && ${grpLowHP} >= ${healMinHP[${hInt}]} && ${Spawn[${grpLowHPID}].Distance3D}<${Spell[${healSpell[${hInt}]}].Range}) {
+									/if (${healClasses[${hInt}].Find[${Target.Class.ShortName}]} || ${healClasses[${hInt}].Find[${Target.Class.Name}]} || ${healClasses[${hInt}].Find[${Target.CleanName}]} || (${healClasses[${hInt}].Find[mt]} || ${healClasses[${hInt}].Find[maintank]})) {
+										/call CastHeal ${hInt} ${Target.ID}
+										/return
+									}
+								}
+							}
+						}
+					/next hInt					
+				}
+			}
+		}
+	}
+
+	/if (!${secondaryHealCheckTimer} && !${secondaryCall}) {
+		/call SecondaryHealCheck ${gPets}
+		/varset secondaryHealCheckTimer 3s
+		/if (${Macro.Return.Equal[HEAL]}) /return
+	}
+	:exitHealLoop
+	
+	/varset healCheckTimer ${healCheckTimerStr}
+/return
+
+Sub SecondaryHealCheck(bool gPets)
+	/if (!${Defined[gPets]}) /declare gPets			bool local FALSE
+	/declare hInt					int local 0
+	/declare groupAvgHP		int local 0
+	/declare avgCount			int local 0
+	/declare lowHP				int local 100
+	/declare pHeal				bool local false
+	/declare hHeal				bool local false
+	/declare grpArray			int local 0
+	/declare targVariable	string local Target
+		
+	/if (${gPets} && ${healPets}) {
+		/for hInt 1 to ${healCount}
+			/if (!${healEnabled[${hInt}]}) /next hInt
+			/if (${healMinGroup[${hInt}]}>1) /next hInt
+			/if (${healGOM[${hInt}]}) {
+				/call HealGoMCheck ${hInt}
+				/if (${Macro.Return.Equal[FALSE]}) /next hInt
+			}
+			/if (${healSlot[${hInt}].Equal[Item]} && ${FindItem[${healSpell[${hInt}]}].Timer}) /next hInt
+			/if (${healSlot[${hInt}].Equal[alt]} && !${Me.AltAbilityReady[${healSpell[${hInt}]}]}) /next hInt
+			/if (${Defined[healRecastTimer${hInt}]} && ${healRecastTimer${hInt}}) /next hInt
+			/if  (${Me.CurrentMana} > ${Spell[${healSpell[${hInt}]}].Mana}) {			
+				/call timer healRecast ${hInt}
+				/if (!${Macro.Return}) {				
+					/for grpArray 0 to ${Group.Members}
+						/if (${Group.Member[${grpArray}].Pet.ID} && !${Group.Member[${grpArray}].Pet.Name.Find[familiar]} && ${Group.Member[${grpArray}].Pet.Distance3D} < ${campRadius}) {
+							/if (${healPromise[${hInt}]} || ${healHoT[${hInt}]}) {
+								/if (${healPromise[${hInt}]}) /call TrackPromise ${Group.Member[${grpArray}].Pet.ID}
+								/if (${healHoT[${hInt}]}) /call TrackHot ${Group.Member[${grpArray}].Pet.ID}
+								/if (${Macro.Return.Equal[TRUE]}) /next hInt
+							}
+							/if (${Group.Member[${grpArray}].Pet.Distance} > ${Spell[${healSpell[${hInt}]}].Range}) /next grpArray
+							/if (${healClasses[${hInt}].Find[${Group.Member[${grpArray}].Class.ShortName}-Pet]} || ${healClasses[${hInt}].Find[${Group.Member[${grpArray}].Class.Name}-Pet]} || ${healClasses[${hInt}].Find[${Group.Member[${grpArray}].CleanName}-Pet]} || ${healClasses[${hInt}].Find[Pet]}) {
+								/if (${Group.Member[${grpArray}].Pet.PctHPs} >= ${healMinHP[${hInt}]} && ${Group.Member[${grpArray}].Pet.PctHPs} <= ${healMaxHP[${hInt}]}) {
+									/call CastHeal ${hInt} ${Group.Member[${grpArray}].Pet.ID}
+									/return HEAL
+								}
+							}																	
+						}
+					/next grpArray
+				}
+			}
+		/next hInt
+	}		
+	
+	/if (${watchCount}) {
+		/varset gPets false
+		/for hInt 1 to ${healCount}
+			/if (!${healEnabled[${hInt}]}) /next hInt
+			/if (${healMinGroup[${hInt}]}>1) /next hInt
+			/if (${healGOM[${hInt}]}) {
+				/call HealGoMCheck ${hInt}
+				/if (${Macro.Return.Equal[FALSE]}) /next hInt
+			}				
+			/if (${healSlot[${hInt}].Equal[Item]} && ${FindItem[${healSpell[${hInt}]}].Timer}) /next hInt
+			/if (${healSlot[${hInt}].Equal[alt]} && !${Me.AltAbilityReady[${healSpell[${hInt}]}]}) /next hInt
+			/if (${Defined[healRecastTimer${hInt}]} && ${healRecastTimer${hInt}}) /next hInt
+			/if  (${Me.CurrentMana} > ${Spell[${healSpell[${hInt}]}].Mana}) {
+				/call timer healRecast ${hInt}
+				/if (!${Macro.Return}) {				
+					/for grpArray 1 to ${watchCount}
+						/if (${Spawn[${watchList[${grpArray}]}].Pet.ID}) /varset gPets true
+						/if (${healPromise[${hInt}]} || ${healHoT[${hInt}]}) {
+							/if (${healPromise[${hInt}]}) /call TrackPromise ${Spawn[${watchList[${grpArray}]}].ID}
+							/if (${healHoT[${hInt}]}) /call TrackHot ${Spawn[${watchList[${grpArray}]}].ID}
+							/if (${Macro.Return.Equal[TRUE]}) /next hInt
+						}
+						/if (${Spawn[${watchList[${grpArray}]}].Distance3D} > ${Spell[${healSpell[${hInt}]}].Range} || ${Spawn[${watchList[${grpArray}]}].Distance3D} > ${campRadius}) /next grpArray
+						/if (${Spawn[${watchList[${grpArray}]}].Type.Equal[Corpse]} || !${Spawn[${watchList[${grpArray}]}].ID}) /next grpArray
+						/if (${Spawn[${watchList[${grpArray}]}].CleanName.Equal[${pullerName}]} && (!${Spawn[${watchList[${grpArray}]}].LineOfSight} || ${Spawn[${watchList[${grpArray}]}].Distance} > ${campRadius})) /next grpArray
+						/if (${healClasses[${hInt}].Find[${Spawn[${watchList[${grpArray}]}].Class.ShortName}]} || ${healClasses[${hInt}].Find[${Spawn[${watchList[${grpArray}]}].Class.Name}]} || ${healClasses[${hInt}].Find[${Spawn[${watchList[${grpArray}]}].CleanName}]} || ((${healClasses[${hInt}].Find[mt]} || ${healClasses[${hInt}].Find[maintank]}) && ${Spawn[${watchList[${grpArray}]}].CleanName.Equal[${mainTank}]})) {
+							/if (${useEQBC} && ${NetBots[${watchList[${grpArray}]}].Zone}) {
+								/varset targVariable NetBots[${watchList[${grpArray}]}]
+							} else {
+								/squelch /target id ${Spawn[${watchList[${grpArray}]}].ID}
+								/delay 1s ${Target.ID}==${Spawn[${watchList[${grpArray}]}].ID}
+								/delay 2
+								/varset targVariable Target
+							}
+							/if (${${targVariable}.PctHPs} >= ${healMinHP[${hInt}]} && ${${targVariable}.PctHPs} <= ${healMaxHP[${hInt}]}) {
+								/call CastHeal ${hInt} ${Spawn[${watchList[${grpArray}]}].ID}
+								/return HEAL
+							}
+						}
+					/next grpArray
+				}
+			}
+		/next hInt
+		
+		/if (${gPets} && ${healPets}) {
+			/for hInt 1 to ${healCount}
+				/if (!${healEnabled[${hInt}]}) /next hInt
+				/if (${healMinGroup[${hInt}]}>1) /next hInt
+				/if (${healGOM[${hInt}]}) {
+					/call HealGoMCheck ${hInt}
+					/if (${Macro.Return.Equal[FALSE]}) /next hInt
+				}					
+				/if (${healSlot[${hInt}].Equal[Item]} && ${FindItem[${healSpell[${hInt}]}].Timer}) /next hInt
+				/if (${healSlot[${hInt}].Equal[alt]} && !${Me.AltAbilityReady[${healSpell[${hInt}]}]}) /next hInt
+				/if (${Defined[healRecastTimer${hInt}]} && ${healRecastTimer${hInt}}) /next hInt
+				/if  (${Me.CurrentMana} > ${Spell[${healSpell[${hInt}]}].Mana}) {
+					/call timer healRecast ${hInt}
+					/if (!${Macro.Return}) {					
+						/for grpArray 1 to ${watchCount}
+							/if (${Spawn[${watchList[${grpArray}]}].Pet.ID}) {
+								/if (${healPromise[${hInt}]} || ${healHoT[${hInt}]}) {
+									/if (${healPromise[${hInt}]}) /call TrackPromise ${Spawn[${watchList[${grpArray}]}].Pet.ID}
+									/if (${healHoT[${hInt}]}) /call TrackHot ${Spawn[${watchList[${grpArray}]}].Pet.ID}
+									/if (${Macro.Return.Equal[TRUE]}) /next hInt
+								}							
+								/if (${Spawn[${watchList[${grpArray}]}].Pet.Distance3D} > ${Spell[${healSpell[${hInt}]}].Range} || ${Spawn[${watchList[${grpArray}]}].Pet.Distance3D} > ${campRadius}) /next grpArray
+								/if (${healClasses[${hInt}].Find[${Spawn[${watchList[${grpArray}]}].Class.ShortName}-Pet]} || ${healClasses[${hInt}].Find[${Spawn[${watchList[${grpArray}]}].Class.Name}-Pet]} || ${healClasses[${hInt}].Find[${Spawn[${watchList[${grpArray}]}].CleanName}-Pet]} || ${healClasses[${hInt}].Find[Pet]}) {
+									/if (${useEQBC} && ${NetBots[${watchList[${grpArray}]}].Zone}) {
+										/varset targVariable NetBots[${watchList[${grpArray}]}].PetHP
+									} else {
+										/squelch /target id ${Spawn[${watchList[${grpArray}]}].Pet.ID}
+										/delay 1s ${Target.ID}==${Spawn[${watchList[${grpArray}]}].Pet.ID}
+										/delay 2
+										/varset targVariable Target.PctHPs
+									}
+									/if (${${targVariable}} >= ${healMinHP[${hInt}]} && ${${targVariable}} <= ${healMaxHP[${hInt}]}) {
+										/call CastHeal ${hInt} ${Spawn[${watchList[${grpArray}]}].Pet.ID}
+										/return HEAL
+									}
+								}
+							}
+						/next grpArray
+					}
+				}
+			/next hInt
+		}
+	}		
+	:exitSecondaryHealLoop
+/return COMPLETED
+
+Sub HealGoMCheck(int healNum)
+	/declare healLevel						int local ${Spell[${healSpell[${healNum}]}].Level}
+	/declare giftLevel						int local 0
+	
+	| /if (${Me.Song[Gift of Mana].ID} && ${healLevel} <= 70) /return TRUE
+	| /if (${Me.Song[Gift of Radiant Mana].ID} && ${healLevel} <= 75) /return TRUE
+	| /if (${Me.Song[Gift of Exquisite Radiant Mana].ID} && ${healLevel} <= 80) /return TRUE
+	| /if (${Me.Song[Gift of Amazing Exquisite Radiant Mana].ID} && ${healLevel} <= 85) /return TRUE
+	
+	/if (${Me.Song[Gift of Mana (70)].ID}) /varset giftLevel 70
+	/if (${Me.Song[Gift of Mana (75)].ID}) /varset giftLevel 75
+	/if (${Me.Song[Gift of Mana (80)].ID}) /varset giftLevel 80
+	/if (${Me.Song[Gift of Mana (85)].ID}) /varset giftLevel 85
+	/if (${Me.Song[Gift of Mana (90)].ID}) /varset giftLevel 90
+	/if (${Me.Song[Gift of Mana (95)].ID}) /varset giftLevel 95
+	/if (${Me.Song[Gift of Mana (100)].ID}) /varset giftLevel 100
+	/if (${Me.Song[Gift of Mana (105)].ID}) /varset giftLevel 105
+	/if (${Me.Song[Gift of Mana (110)].ID}) /varset giftLevel 110
+	/if (${Me.Song[Gift of Mana (115)].ID}) /varset giftLevel 115
+	/if (${Me.Song[Gift of Mana (120)].ID}) /varset giftLevel 120
+	
+	/if (${healLevel} <= ${giftLevel}) /return TRUE
+/return FALSE
+
+Sub HealRecast(int hNum,string rcTime)
+	/if (!${Defined[healRecastTimer${hNum}]}) /declare healRecastTimer${hNum}	timer outer 0s
+	/varset healRecastTimer${hNum} ${rcTime}
+/return
+
+Sub LoadSettings
+	| ===============================
+	| pet settings
+	| ===============================
+	/declare petSpellName										string outer
+	/declare petSpellSlot										string outer
+	/declare petSummonAtStart								bool outer FALSE
+	/declare usePetShrink										bool outer FALSE
+	
+	/call GetINISetting ${iniName} PetSettings PetSpellName petSpellName NULL
+	/call GetINISetting ${iniName} PetSettings PetSpellSlot petSpellSlot GEM1
+	/call GetINISetting ${iniName} PetSettings SummonAtStart petSummonAtStart FALSE
+	/call GetINISetting ${iniName} PetSettings ShrinkPet usePetShrink TRUE
+
+	| ====================
+	| Load Heals
+	| ====================	
+	/declare healCount											int outer
+	/call GetINIArrayCount ${iniName} Heals HealName
+	/varset healCount ${Macro.Return}
+	/call EchoLog "Loading heals:  ${healCount} heal spell(s)" TRUE
+
+	/declare healSpell[${healCount}]				string outer
+	/declare healSlot[${healCount}]					string outer
+	/declare healMinGroup[${healCount}]			int outer
+	/declare healMinHP[${healCount}]				int outer
+	/declare healMaxHP[${healCount}]				int outer
+	/declare healClasses[${healCount}]			string outer
+	/declare healType[${healCount}]					string outer
+	/declare healAnnounce[${healCount}]			string outer
+	/declare healHoT[${healCount}]					bool outer
+	/declare healPromise[${healCount}]			bool outer
+	/declare healDuration[${healCount}]			string outer
+	/declare healAlias[${healCount}]				string outer
+	/declare healEnabled[${healCount}]			bool outer
+	/declare healGOM[${healCount}]					bool outer
+	/declare healRecastDly[${healCount}]		string outer
+	/declare healTwinHeal[${healCount}]			bool outer
+	/declare classList											string outer
+	/declare fastestHealNum									int outer
+	/declare fastestCastTime								float outer 20.0
+	/declare useGroupHeals									bool outer FALSE
+	/declare groupHotTimer									timer outer 0s
+	
+	/declare twinHealSpell									string outer NULL
+	/declare twinHealHP											int outer 40
+	/declare twinHealTimer									timer outer 0s
+	/call GetINISetting ${iniName} Heals TwinHealSpell twinHealSpell NULL
+	/call GetINISetting ${iniName} Heals TwinHealHP twinHealHP 40
+	
+	/if (${healCount}) {
+		/for nArray 1 to ${healCount}
+			/call GetINISetting ${iniName} Heals HealName${nArray} healSpell[${nArray}] NULL
+			/call GetINISetting ${iniName} Heals HealSlot${nArray} healSlot[${nArray}] gem1
+			/call GetINISetting ${iniName} Heals HealMinGroup${nArray} healMinGroup[${nArray}] 1
+			/call GetINISetting ${iniName} Heals HealMinHP${nArray} healMinHP[${nArray}] 1
+			/call GetINISetting ${iniName} Heals HealMaxHP${nArray} healMaxHP[${nArray}] 95
+			/call GetINISetting ${iniName} Heals HealClasses${nArray} healClasses[${nArray}] mt|Pet|WAR|SHD|PAL|RNG|MNK|ROG|BRD|BST|BER|SHM|CLR|DRU|WIZ|MAG|ENC|NEC
+			/call GetINISetting ${iniName} Heals HealType${nArray} healType[${nArray}] ALL FALSE
+			/call GetINISetting ${iniName} Heals HealAnnounce${nArray} healAnnounce[${nArray}] NULL
+			/call GetINISetting ${iniName} Heals HealDuration${nArray} healDuration[${nArray}] 0s FALSE
+			/call GetINISetting ${iniName} Heals HealAlias${nArray} healAlias[${nArray}] HEAL${nArray} FALSE
+			/call GetINISetting ${iniName} Heals HealEnabled${nArray} healEnabled[${nArray}] TRUE FALSE
+			/call GetINISetting ${iniName} Heals HealGOM${nArray} healGOM[${nArray}] FALSE FALSE
+			/call GetINISetting ${iniName} Heals HealRecastDly${nArray} healRecastDly[${nArray}] NULL FALSE
+			/call GetINISetting ${iniName} Heals HealTwinHeal${nArray} healTwinHeal[${nArray}] FALSE
+			
+			/varset classList ${classList}|${healClasses[${nArray}]}
+			
+			/if (${healSlot[${nArray}].Find[GEM]} && ${Spell[${healSpell[${nArray}]}].MyCastTime.TotalSeconds} < ${fastestCastTime} && !${Spell[${healSpell[${nArray}]}].Duration}) {
+				/varset fastestHealNum ${nArray}
+				/varset fastestCastTime ${Spell[${healSpell[${nArray}]}].MyCastTime.TotalSeconds}
+			}
+			/if (${healMinGroup[${nArray}]} > 1) /varset useGroupHeals TRUE
+			/if (${Spell[${healSpell[${nArray}]}].Duration}) {
+				/if (${healSpell[${nArray}].Find[Promise]}) {
+					/varset healPromise[${nArray}] TRUE
+					/varset healHoT[${nArray}] FALSE
+				} else {
+					/varset healPromise[${nArray}] FALSE
+					/varset healHoT[${nArray}] TRUE			
+				}
+			}
+			/if (${healDuration[${nArray}].Equal[NULL]} || !${healDuration[${nArray}].Length}) /varset healDuration[${nArray}] 0s
+			/if (${healSpell[${nArray}].Find[Intervention]} && ${Me.AltAbility[Fortified Intervention]}) {
+				| 30 * Me.AltAbility does not work, that returns the number of points spent on it, not the level of it.
+				| /if (${healRecastDly[${nArray}].Equal[NULL]} || !${healRecastDly[${nArray}].Length}) /varset healRecastDly[${nArray}] ${Math.Calc[${Spell[${healSpell[${nArray}]}].RecastTime} - (30 * ${Me.AltAbility[Fortified Intervention]})]}s
+			}			
+			/if (${healRecastDly[${nArray}].Equal[NULL]} || !${healRecastDly[${nArray}].Length}) /varset healRecastDly[${nArray}] ${Spell[${healSpell[${nArray}]}].RecastTime.TotalSeconds}s
+
+			/call EchoLog ".....${nArray} - NAME: ${healSpell[${nArray}]} SLOT: ${healSlot[${nArray}]} MINGROUP: ${healMinGroup[${nArray}]} MINHP: ${healMinHP[${nArray}]} MAXHP: ${healMaxHP[${nArray}]} TYPE: ${healType[${nArray}]} RECASTDLY: ${healRecastDly[${nArray}]} CLASSES: ${healClasses[${nArray}]}" TRUE
+		/next nArray
+	}
+	/call GetINISetting ${iniName} Heals HealName${Math.Calc[${healCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} Heals HealSlot${Math.Calc[${healCount}+1].Int} NULL GEM1
+	/call GetINISetting ${iniName} Heals HealMinHP${Math.Calc[${healCount}+1].Int} NULL 1
+	/call GetINISetting ${iniName} Heals HealMaxHP${Math.Calc[${healCount}+1].Int} NULL 95
+	/call GetINISetting ${iniName} Heals HealClasses${Math.Calc[${healCount}+1].Int} NULL mt|Pet|WAR|SHD|PAL|RNG|MNK|ROG|BRD|BST|BER|SHM|CLR|DRU|WIZ|MAG|ENC|NEC
+	/call GetINISetting ${iniName} Heals HealMinGroup${Math.Calc[${healCount}+1].Int} NULL 1
+	/call GetINISetting ${iniName} Heals HealAnnounce${Math.Calc[${healCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} Heals HealTwinHeal${Math.Calc[${healCount}+1].Int} NULL FALSE
+	
+	| ===============================
+	| Load general
+	| ===============================	
+	/declare doHeals												bool outer TRUE
+	/declare healCheckTimerStr							string outer
+	/declare healCheckTimer									timer outer
+	/declare secondaryHealCheckTimer				timer outer
+	/declare canniSpell											string outer NULL
+	/declare canniMinHealth									int outer 50
+	/declare canniMaxMana										int outer 70
+	/declare canniTimerStr									string outer 10s
+	/declare canniTimer											timer outer 0s
+	/declare canniSlot											string outer GEM1
+	/declare useAACanni											bool outer TRUE
+	/declare lastTargID											int outer 0
+	/declare healPets												bool outer FALSE
+	/declare emergencyHP										int outer 35
+	/declare castStart											bool outer FALSE	
+	/declare virulentOnAggro								bool outer FALSE
+
+	/call GetINISetting ${iniName} General HealAtStart doHeals TRUE
+	/call GetINISetting ${iniName} General HealPets healPets FALSE
+	/call GetINISetting ${iniName} General EmergencyHealHP emergencyHP 35
+	| The following settings are deprecated, moved to Shaman_General
+	/call GetINISetting ${iniName} General CanniMinHealth canniMinHealth 50 FALSE
+	/call GetINISetting ${iniName} General CanniMaxMana canniMaxMana 70 FALSE
+	/call GetINISetting ${iniName} General CanniSpell canniSpell NULL FALSE
+	/call GetINISetting ${iniName} General CanniSlot canniSlot GEM1 FALSE
+	/call GetINISetting ${iniName} General CanniMinTimer canniTimerStr 10s FALSE
+	/call GetINISetting ${iniName} General UseAACanni useAACanni TRUE FALSE
+	/call GetINISetting ${iniName} General VirulentOnAggro virulentOnAggro FALSE FALSE
+	| This setting is deprecated, moved to [Priorities]
+	/call GetINISetting ${iniName} General HealCheckTimer healCheckTimerStr 2s FALSE
+	
+	| ===============================
+	| Load Shaman specific priorities
+	| ===============================			
+	/call GetINISetting ${iniName} Priorities HealPriority healCheckTimerStr ${healCheckTimerStr}
+	
+	| ===============================
+	| Load Shaman_General
+	| ===============================		
+	/declare doShrink												bool outer FALSE
+	/declare useGroupShrink									bool outer TRUE
+	/declare shrinkTargets									string outer Pet|WAR|SHD|PAL|RNG|MNK|ROG|BRD|BST|BER|SHM|CLR|DRU|WIZ|MAG|ENC|NEC
+	/declare shrinkCheckTimer								timer outer 0s
+	/declare shrinkSlot											string outer GEM1
+	/declare shrinkToHeight									float outer 2.1
+	/declare meleeMobs											bool outer FALSE
+		
+	/call GetINISetting ${iniName} Shaman_General ShrinkGroup doShrink FALSE
+	/call GetINISetting ${iniName} Shaman_General ShrinkTargets shrinkTargets WAR|SHD|PAL|RNG|MNK|ROG|BRD|BST|BER|SHM|CLR|DRU|WIZ|MAG|ENC|NEC
+	/call GetINISetting ${iniName} Shaman_General UseGroupShrink useGroupShrink TRUE
+	/call GetINISetting ${iniName} Shaman_General ShrinkSlot shrinkSlot GEM1
+	/call GetINISetting ${iniName} Shaman_General ShrinkMaxHeight shrinkToHeight 2.1 FALSE
+	/call GetINISetting ${iniName} Shaman_General CanniMinHealth canniMinHealth ${canniMinHealth}
+	/call GetINISetting ${iniName} Shaman_General CanniMaxMana canniMaxMana ${canniMaxMana}
+	/call GetINISetting ${iniName} Shaman_General CanniSpell canniSpell "${canniSpell}"
+	/call GetINISetting ${iniName} Shaman_General CanniMinTimer canniTimerStr ${canniTimerStr}
+	/call GetINISetting ${iniName} Shaman_General CanniSlot canniSlot "${canniSlot}"
+	/call GetINISetting ${iniName} Shaman_General UseAACanni useAACanni ${useAACanni}
+	/call GetINISetting ${iniName} Shaman_General VirulentOnAggro virulentOnAggro ${virulentOnAggro}
+	/call GetINISetting ${iniName} Shaman_General MeleeMobs meleeMobs FALSE FALSE
+	
+	/call CommonLoad
+	
+	| ===============================
+	| Final Vars
+	| ===============================	
+	/declare currHealTarg										int outer 0
+	/declare currHealID											int outer 0
+	| /declare engagePet											bool outer false
+	/declare duckHealNum										int outer 0
+	/declare duckHealTarg										int outer 0
+	/declare duckHealName										string outer
+	/declare duckHealSlot										string outer
+	/declare castTimer											timer outer 0s
+	
+	/call EchoLog "ShamanBot \agv${meVersion}\ao, written by \awDevestator\ao, initiated"
+	/call EchoLog "Looting Corpses: \ag${lootCorpses}"
+	/call EchoLog "Main Tank: \ag${mainTank}"
+	/call EchoLog "Main Assist: \ag${mainAssist}"
+	/call EchoLog "Puller: \ag${pullerName}"
+	/call EchoLog "INI FileName: \ag${iniName}"
+	/call EchoLog "Healing: \ag${doHeals}"
+	/call EchoLog "Debuffing: \ag${doDebuffs}"
+	/call EchoLog "Group Buffing: \ag${doGroupBuffs}"
+	/if (${doGroupBuffs}) /call EchoLog "Minimum Check Time: \ag${minBuffCheckTimerStr}"
+	/call EchoLog "Self Buffing: \ag${doSelfBuffs}"
+	/if (${doAnnounce}) {
+		/call EchoLog "Announcements: \ag${announceChan}"
+	} else {
+		/call EchoLog "Announcements: \agOFF"
+	}
+/return
+
+Sub ShamanCombatCheck
+	/call CheckForAdds ${campRadius} ${Me.ID} false true
+	| /if (${targCount}) /call AddCleanUp
+	/if (!${inCombat} && (${lTargCount} > 0 || ${Me.CombatState.Equal[Combat]})) {
+		/varset inCombat true
+		/varset healCheckTimer 0
+		/varset minBuffCheckTimer 10s
+		/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) /varset engagePet true
+	}
+	/if (${inCombat} && ${lTargCount} < 1 && ${Me.CombatState.NotEqual[Combat]}) {
+		/varset inCombat false
+		/call AfterCombatRoutines
+		/varset targCount 0
+		/varset corpseCount 0
+		/varset lTargCount 0
+		/varset healCheckTimer 20s
+		/varset engagePet false
+		/if (${minBuffCheckTimer} < 150) /varset minBuffCheckTimer 15s
+	}		
+/return
+
+Sub TrackHoT(int playerID, int SpellID)
+	/if (!${Defined[playerID]}) /return
+	/declare pLoop					int local 0
+	/declare pInt						int local 0 
+	
+	/if (!${Defined[hotHeal${playerID}]}) /declare hotHeal${playerID}			timer outer 0s
+	/if (${Defined[SpellID]}) {
+		/if (${healDuration[${SpellID}].NotEqual[0s]}) {
+			/varset hotHeal${playerID} ${healDuration[${SpellID}]}
+		} else {
+			/varset hotHeal${playerID} ${Math.Calc[${Spell[${healSpell[${SpellID}]}].Duration.TotalSeconds} + 1]}s
+		} 
+	} else {
+		/if (${hotHeal${playerID}}) {
+			/return TRUE
+		} else {
+			/return FALSE
+		}
+	}
+/return FALSE
+
+Sub TrackPromise(int playerID, int SpellID)
+	/if (!${Defined[playerID]}) /return
+	/declare pLoop					int local 0
+	/declare pInt						int local 0 
+	
+	/if (!${Defined[promiseHeal${playerID}]}) /declare promiseHeal${playerID}			timer outer 0s
+	/if (${Defined[SpellID]}) {
+		/if (${healDuration[${SpellID}].NotEqual[0s]}) {
+			/varset promiseHeal${playerID} ${healDuration[${SpellID}]}			
+		} else {
+			/varset promiseHeal${playerID} ${Math.Calc[${Spell[${healSpell[${SpellID}]}].Duration.TotalSeconds} + 1]}s
+		}
+	} else {
+		/if (${promiseHeal${playerID}}) {
+			/return TRUE
+		} else {
+			/return FALSE
+		}
+	}
+/return FALSE
+
+Sub ShrinkCheck(string charName)
+	/declare shrinkNeeded						bool local FALSE
+	/declare groupHasPets						bool local FALSE
+	/declare shrinkItem							string local NULL
+	/if (!${Defined[charName]}) {
+		/if (${useGroupShrink} && (${Me.Book[Tiny Terror]} || ${Me.AltAbilityReady[Group Shrink]}) && ${Group.Members}) {
+			:castGroupShrink
+				/varset shrinkNeeded FALSE
+				/call ShamanCombatCheck
+				/if (${inCombat}) /return
+				/for nArray 0 to ${Group.Members}
+					/if (${Group.Member[${nArray}].ID} && ${Group.Member[${nArray}].Type.Equal[PC]} && ${Group.Member[${nArray}].Distance} < 60 && ${Group.Member[${nArray}].Height}>${shrinkToHeight}) {
+						/call EchoLog "${Group.Member[${nArray}].CleanName} needs to be shrunk, current height: ${Group.Member[${nArray}].Height}, max shrink height: ${shrinkToHeight}" TRUE
+						/varset shrinkNeeded TRUE
+					}
+					/if (${Group.Member[${nArray}].Pet.ID}) /varset groupHasPets TRUE
+				/next nArray
+				/if (${shrinkNeeded}) {
+					/if (${Me.AltAbilityReady[Group Shrink]}) {
+						/squelch /target ID ${Me.ID}
+						/delay 1s ${Target.ID}==${Me.ID}
+						/if (${Target.ID}==${Me.ID}) {
+							/call EchoLog ".....Casting Group Shrink" TRUE
+							/call MQ2Cast "Group Shrink" alt
+							/goto :castGroupShrink
+						}
+					} else {
+						/if (${Me.CurrentMana} < ${Math.Calc[${Spell[Tiny Terror].Mana}+(${Spell[Tiny Terror].Mana}/10)]}) {
+							/varset shrinkCheckTimer 1m
+							/return
+						}
+						/squelch /target ID ${Me.ID}
+						/delay 1s ${Target.ID}==${Me.ID}					
+						/if (${Target.ID}==${Me.ID}) {
+							/call EchoLog ".....Casting Tiny Terror" TRUE
+							/call MQ2Cast "Tiny Terror" ${shrinkSlot}
+							/goto :castGroupShrink
+						}
+					}
+				}
+		}
+		/if ((!${useGroupShrink} || (!${Me.Book[Tiny Terror]} && !${Me.AltAbility[Group Shrink]}) || !${Group.Members}) && ${Me.Book[Shrink]}) {
+			/if (${Me.CurrentMana} < ${Math.Calc[${Spell[Shrink].Mana}+(${Spell[Shrink].Mana}/2)]}) {
+				/varset shrinkCheckTimer 1m
+				/return
+			}
+			/if (${Group.Members}) {
+				/for nArray 0 to ${Group.Members}
+					/call ShamanCombatCheck
+					/if (${inCombat}) /return
+					:castShrink
+						/if (${Group.Member[${nArray}].ID} && (${Group.Member[${nArray}].Type.Equal[PC]} || ${Group.Member[${nArray}].Type.Equal[MERCENARY]}) && ${Group.Member[${nArray}].Distance} < 200 && ${Group.Member[${nArray}].Height}>${shrinkToHeight} && ${Me.CurrentMana} > ${Math.Calc[${Spell[Shrink].Mana}+(${Spell[Shrink].Mana}/2)]}) {
+							/if (${Group.Member[${nArray}].Pet.ID}) /varset groupHasPets TRUE
+							/if (${shrinkTargets.Find[${Group.Member[${nArray}].CleanName}]} || ${shrinkTargets.Find[${Group.Member[${nArray}].Class.ShortName}]} || ${shrinkTargets.Find[${Group.Member[${nArray}].Class.Name}]} || ${shrinkTargets.Find[${Group.Member[${nArray}].Race}]}) {
+								/call EchoLog "${Group.Member[${nArray}].CleanName} needs to be shrunk, current height: ${Group.Member[${nArray}].Height}, max shrink height: ${shrinkToHeight}" TRUE
+								/squelch /target ID ${Group.Member[${nArray}].ID}
+								/delay 1s ${Target.ID}==${Group.Member[${nArray}].ID}
+								/if (${Target.ID}==${Group.Member[${nArray}].ID}) {
+									/call EchoLog ".....Casting shrink" TRUE
+									/call MQ2Cast "Shrink" ${shrinkSlot}
+									/goto :castShrink
+								}
+							}
+						}
+				/next nArray
+			} else {
+				/call ShamanCombatCheck
+				/if (${inCombat}) /return
+				:castShrinkSelf
+					/if (${Me.Height}>${shrinkToHeight} && ${Me.CurrentMana} > ${Math.Calc[${Spell[Shrink].Mana}+(${Spell[Shrink].Mana}/2)]}) {
+						/if (${shrinkTargets.Find[${Me.CleanName}]} || ${shrinkTargets.Find[${Me.Class.ShortName}]} || ${shrinkTargets.Find[${Me.Class.Name}]} || ${shrinkTargets.Find[${Me.Race}]}) {
+							/call EchoLog "${Me.CleanName} needs to be shrunk, current height: ${Me.Height}, max shrink height: ${shrinkToHeight}" TRUE
+							/squelch /target ID ${Me.ID}
+							/delay 1s ${Target.ID}==${Me.ID}
+							/if (${Target.ID}==${Me.ID}) {
+								/call EchoLog ".....Casting shrink" TRUE
+								/call MQ2Cast "Shrink" ${shrinkSlot}
+								/goto :castShrinkSelf
+							}
+						}						
+					}
+			}
+		}
+		/if (${groupHasPets} && ${shrinkTargets.Find[pet]} && ${Me.Book[Shrink]} && ${Group.Members}) {
+			/for nArray 0 to ${Group.Members}
+				/call ShamanCombatCheck
+				/if (${inCombat}) /return
+				:shrinkPet
+				/if (${Group.Member[${nArray}].Pet.ID} && ${Group.Member[${nArray}].Pet.Height}>${shrinkToHeight} && ${Group.Member[${nArray}].Pet.Distance} < ${campRadius} && !${Group.Member[${nArray}].Pet.Name.Find[familiar]} && ${Me.CurrentMana}>${Math.Calc[${Spell[Shrink].Mana}+(${Spell[Shrink].Mana}/2)]}) {
+					/call EchoLog "${Group.Member[${nArray}].CleanName}'s pet needs to be shrunk, current height: ${Group.Member[${nArray}].Pet.Height}, max shrink height: ${shrinkToHeight}" TRUE
+					/squelch /target ID ${Group.Member[${nArray}].Pet.ID}
+					/delay 1s ${Target.ID}==${Group.Member[${nArray}].Pet.ID}
+					/if (${Target.ID}==${Group.Member[${nArray}].Pet.ID}) {
+						/call EchoLog ".....Casting shrink" TRUE
+						/call MQ2Cast "Shrink" ${shrinkSlot}
+						/goto :shrinkPet
+					}	
+				}
+			/next nArray
+		}
+		
+		/varset shrinkCheckTimer 1m
+	} else {
+		/if (${Spawn[${charName}].ID} && ${Spawn[${charName}].Distance} < ${campRadius}) {
+			/call EchoLog "Attempting to shrink ${charName}" TRUE
+			/squelch /target ${charName}
+			/delay 1s ${Target.CleanName.Equal[${charName}]}
+			/if (${Target.CleanName.Equal[${charName}]}) {
+				/if (${Target.Type.Equal[PET]} && ${Target.ID}==${Me.Pet.ID}) {
+					/call FindItemWithEffect "Tiny Comapnion"
+					/varset shrinkItem ${Macro.Return}
+				}
+				/if (${Target.Type.Equal[PET]} && ${Target.ID}==${Me.Pet.ID} && ${shrinkItem.NotEqual[NULL]} && !${FindItem[${shrinkItem}].Timer}) {
+					/call MQ2Cast "${shrinkItem}" item
+				} else /if (${Target.Type.Equal[PET]} && ${Target.ID}==${Me.Pet.ID} && ${Me.AltAbilityReady[Dimunitive Companion]}) {
+					/call MQ2Cast "Dimunitive Companion" alt
+				} else /if (${Target.Type.Equal[PET]} && ${Target.ID}==${Me.Pet.ID} && ${Me.Book[Tiny Companion]} && ${Me.CurrentMana}>${Spell[Tiny Companion].Mana}) {
+					/call MQ2Cast "Tiny Companion" ${shrinkSlot}
+				} else /if (${Me.Book["Shrink"]} && ${Me.CurrentMana}>${Spell[Shrink].Mana}) {
+					/call MQ2Cast "Shrink" ${shrinkSlot}
+				} else /if (${Me.Book["Tiny Terror"]} && ${useGroupShrink} && ${Target.Type.NotEqual[PET]} && ${Me.CurrentMana}>${Spell[Tiny Terror].Mana}) {
+					/call MQ2Cast "Tiny Terror" ${shrinkSlot}
+				} else /if (${Me.CurrentMana}<${Spell[Shrink].Mana}) {
+					/return Do not have enough mana to shrink ${charName}
+				} else {
+					/return Could not find a valid spell to use to shrink ${charName}
+				}
+			} else {
+				/return Unable to target ${charName} to shrink.
+			}
+		}
+	}
+/return NULL
+
+Sub SummonPet
+	/declare shrinkCastCount					int local 0
+	/declare shrinkItem								string local NULL
+	/if (${petSpellName.NotEqual[NULL]} && ${petSpellName.Length} && ${petSummonAtStart} && (!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]})) {
+		/if (${Me.Pet.ID}) /pet get lost
+		/delay 5
+		/call MQ2Cast "${petSpellName}" ${petSpellSlot}
+		/if (${CastResult.NotEqual[CAST_SUCCESS]}) {
+			/delay 5
+			/call MQ2Cast "${petSpellName}" ${petSpellSlot}
+			/if (${CastResult.NotEqual[CAST_SUCCESS]}) /call EchoLog "Pet summoning failed, reason: ${CastResult}" TRUE
+		}
+		
+		/if (${usePetShrink} && ${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) {
+			/if (${Me.AltAbilityReady[Diminutive Companion]}) {
+				/call MQ2Cast "Diminutive Companion" alt
+			} else {
+				/call FindItemWithEffect "Tiny Companion"
+				/varset shrinkItem ${Macro.Return}
+				/if (${shrinkItem.NotEqual[NULL]} || ${Me.Book[Tiny Companion]} || ${Me.Book[Shrink]}) {
+					:castShrink
+						/squelch /target ID ${Me.Pet.ID}
+						/delay 2s ${Target.ID}==${Me.Pet.ID}
+						/if (${shrinkItem.NotEqual[NULL]} && !${FindItem[${shrinkItem}].Timer}) {
+							/call MQ2Cast "${shrinkItem}" Item
+						} else /if (${Me.Book[Tiny Companion]}) {
+							/call MQ2Cast "Tiny Companion" ${petSpellSlot}
+						} else /if (${Me.Book[Shrink]}) {
+							/call MQ2Cast "Shrink" ${petSpellSlot}
+						}
+						/if (${CastResult.Equal[CAST_SUCCESS]}) /varcalc shrinkCastCount ${shrinkCastCount} + 1
+					/if (${shrinkCastCount}<2) /goto :castShrink
+				}
+			}
+		}		
+	}
+/return
+
+Sub VirulentCheck
+	/if (!${Me.AltAbilityReady[Virulent Paralysis]}) /return
+	/call CheckForAggro
+	/if (${gotAggroID}) {
+		/squelch /target ID ${gotAggroID}
+		/delay 2s ${Target.ID}==${gotAggroID}
+		/if (${Target.ID}==${gotAggroID}) /call MQ2Cast "Virulent Paralysis" alt
+	}
+/return

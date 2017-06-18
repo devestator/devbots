@@ -1,0 +1,978 @@
+| =================================================================================================
+| 									   NecroBot v1.16
+| 									Written By: Devestator
+| 													
+| 													
+| USAGE: /macro necroBot [IniName]
+| 													
+| 													
+| Description:												
+|  This is a bot meant to automate the role of a necro in a group.  Also has a solo mode that
+|   will kite mobs on a preset kite path.
+| 													
+| 													
+| Requirements:												
+|  MQ2Cast_Spell_Routines.inc										
+|  devMovement.inc
+|  devCommon.inc											
+|  necroBotSettings.ini (you can create custom INIs nameing them necroBotSettings_name.ini)			
+|  PLUGIN: MQ2Cast
+|  PLUGIN: MQ2Debuffs													
+|  PLUGIN: MQ2Exchange
+| 
+| v1.16 Update Notes
+|  -Converted to common target routine
+|  -Added ability to combat npc pets
+| 
+| v1.15 Update Notes
+|  -Converted to global pull routine
+| 
+| v1.14 Update Notes
+|  -Updated Deathbloom to not cast if you are not in the zone you started the macro in
+|  -Added a mana check to the pet summon routine to make sure the necro has enough mana
+|  -Improved pet handling to ensure the pet is on the correct mob and always on the mob
+| 
+| v1.13 Update Notes
+|  -Fixed a problem in pull routine with NetBots.CanCast errors
+|  -Updated solo routine to work with it's own special movement routines (looks a little more natural)
+| 
+| v1.12 Update Notes
+|  -Updated pull routine to not target mob to check for HPs until it gets closer, and also checks for
+|    unfriend PCs withing a radius of 50 of the mob before going to pull it.
+|  -Changed maximum item / spell range to 180 to accomadate new default /target distance
+| 
+| v1.11 Update Notes
+|  -Corrected some missing variables in the summon pet routine dealing with shrink
+| 
+| v1.10 Update Notes
+|  -Updated pull routine to check endurance
+| 
+| v1.09 Update Notes
+|  -Corrected a typo when loading resultig in an error and UsePetShrink being ignored
+| 
+| v1.08 Update Notes
+|  -Added the ability to use pet shrink
+| 
+| v1.07 Update Notes
+|  -Corrected a problem where fd check was not executing when getting aggro
+| 
+| v1.06 Update Notes
+|  -Corrected a typo in the failed FD check
+|  -Removed obsolete engagePet declare
+| 
+| v1.05 Update Notes
+|  -Added HealCheck routine to fix erroneous call temporarily
+| 
+| v1.04 Update Notes
+|  -Fixed pulling routine to take dead mercs into account
+| 
+| v1.03 Update Notes
+|  -Updated for devCommonPremium.inc
+|  -Added support for using MQ2Navigation
+| 
+| v1.02 Update Notes
+|  -Fixed it so the bot would assist in combat if combat is started while following
+|  -Added support for new UF Spell Death Bloom, new settings: [General] DeathBloomSpell DeathBloomSlot
+|   DeathBloomMinHP DeathBloomMaxMana
+| 
+| v1.01 Update Notes
+|  -Removed an unused call to the subroutine HealthCheck
+|  -Put a distance requirement on casting snare
+| 
+| ==================================================================================================
+
+#include devCommonPremium.inc
+#include necroBotSoloMovement.inc
+|#include necroBotSettings.ini
+
+#event pFocusOn "Focusing on one target, Master."
+#event pFocusOff "No longer focusing on one target, Master."
+#event FDFail "#1# has fallen to the ground."
+#event petGuard "#*#Guarding with my life..oh splendid one.#*#"
+
+Sub Main(string iniNameStr)
+	/declare meVersion		float outer 1.16
+	/declare myName				string outer necrobot
+	/declare myClass			string outer NEC
+	/declare resumeFollow	bool local FALSE
+	
+	/squelch /mqlog clear
+	
+	/call CommonInit
+	/varset reqCommon	2.36
+	/varset reqMovement  1.65
+	/varset debugMode TRUE
+	
+	/call EchoLog "Necrobot Initialized" TRUE
+	/call EchoLog "Loading variables..." TRUE
+	/if (!${Defined[iniNameStr]}) {
+		/varset iniName necroBotSettings.ini
+	} else {
+		/if (!${iniNameStr.Equal[default]}) {
+			/varset iniName necroBotSettings_${iniNameStr}.ini
+		} else {
+			/varset iniName necroBotSettings.ini
+		}
+	}
+	
+	/call LoadSettings
+	
+	/varset targCount 0
+	/declare currID						int local
+	
+	/pet hold on
+	
+	/if (${soloMode}) /call SoloMain
+	:mainLoop
+		/doevents
+		/call NecroCombatCheck
+		/call CheckForAggro
+		
+		/if (${Me.Moving}) /varset sitTimer 3s
+		/if (${Me.Sitting}) {
+			/varset meSitting TRUE
+		} else /if (!${Me.Sitting} && ${meSitting}) {
+			/varset sitTimer 3s
+			/varset meSitting FALSE
+		}
+		
+		/if (${allowSit} && ((${outOfCombatSit} && !${inCombat}) || (${inCombatSit} && ${inCombat})) && !${Me.Sitting} && !${sitTimer} && !${Me.Mount.ID} && !${gotAggro} && (!${followMode} || ${inCombat}) && !${Me.Casting.ID}) /sit on
+
+		/if (${followMode} && ${inCombat}) {
+			/call SetHome
+			/varset followMode FALSE
+			/varset resumeFollow TRUE	
+			/squelch /stick off
+			/call EchoLog "Combat started while following, breaking follow to participate in combat." TRUE
+		} else /if (${resumeFollow} && !${inCombat}) {
+			/squelch /target ID ${followTargID}
+			/delay 2s ${Target.ID}==${followTargID}
+			/if (${Target.ID}==${followTargID} && ${Target.Type.NotEqual[corpse]} && ${Target.Distance} < 200) {
+				/squelch /stick hold 10
+				/varset followMode TRUE
+			} else {
+				/call EchoLog "\ayCould not find follow target to resume following after combat."
+				/varset followTarg NULL
+				/varset followTargID 0
+			}			
+			/varset resumeFollow FALSE
+		}
+		
+		/if (!${inCombat} && !${followMode}) {
+			/if (!${minBuffCheckTimer}) /call buffCheck
+			/if ((!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]}) && ${petSummonAtStart}) /call SummonPet
+			/if (${pullMode} && !${petGuard} && ${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) /pet guard
+			/call CommonRoutines
+			| /if (!${pullTimer} && ${pullMode}) /call PullRoutine
+		} else /if (${inCombat}) {
+			/call CheckForAggro
+			/if (${gotAggro} || ${Me.PctHPs} <= ${FDHP}) /call FDRoutine 5s
+			/if ((!${Spawn[${mainTank}].ID} || ${Spawn[${mainTank}].Type.Equal[Corpse]}) && ${fdOnMainDeath}) {
+				/call EchoLog "Main tank has died or is no longer in the zone, FDing"
+				/call FDRoutine 30m
+				/endmacro
+			}
+			/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) {
+				/if (${Me.Pet.PctHPs} <= ${petFDHP} && !${Me.Pet.Feigning}) {
+					/pet feign
+				} else /if (${Me.Pet.Feigning} && ${Me.Pet.PctHPs} >= ${petFDStand}) {
+					/pet stand
+					/varset engagePet TRUE
+				}
+				/if (${Me.Pet.PctHPs} <= ${petHealPct} && !${Me.Feigning} && !${Me.Casting.ID}) {
+					/call MQ2Cast "${petHeal}" ${petHealSlot}
+				}
+			}
+			/if (${Me.PctMana} <= ${deathBloomMaxMana} && ${Me.PctHPs} >= ${deathBloomMinHP} && ${deathBloomSpell.NotEqual[NULL]} && !${Me.Feigning} && !${deathBloomReuse} && ${Zone.ID}==${startZoneID}) {
+				/call EchoLog "Using ${deathBloomSpell} to recover some mana.  HPs: ${Me.PctHPs} Mana: ${Me.PctMana}" TRUE
+				/call MQ2Cast "${deathBloomSpell}" ${deathBloomSlot} 0 CheckForAggro
+				/if (${CastResult.Equal[CAST_SUCCESS]}) /varset deathBloomReuse ${Spell[${deathBloomSpell}].Duration.TotalSeconds}s
+			} else /if (${deathBloomResuse} && ${Me.PctHPs} < ${deathBloomMinHP}) {
+				| Check for and remove deathbloom spell
+				
+			}
+			|**/call GetMATarget
+			/if (${maTargetID} && ${maTargetID}!=${Target.ID}) {
+				/assist ${mainAssist}
+				/delay 1s ${Target.ID}==${maTargetID}
+			}**|
+			/call CommonGetTarget
+			/if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[PET]} && ${Target.Master.Type.NotEqual[PC]})) && ${Math.Distance[${Target.Y},${Target.X}:${homeY},${homeX}]}<=${campRadius} && ${Target.PctHPs}<=${assistPct}) {
+				/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]} && ${Me.Pet.Following.ID}!=${Target.ID}) /pet attack
+				/if (${csCount}) /call CastSpell
+			}
+			/call CommonCombatRoutines HealCheck
+		}
+	/goto :mainLoop
+/return
+
+Sub AfterDeath
+
+/return
+
+Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
+	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/declare hMsg				string local COMPLETED_NOTFOUND
+	/declare rFromID		int local 0
+
+	/varset rFromID ${Spawn[pc ${rFrom}].ID}
+	
+	| ==========================
+	| Bot specific commands
+	| ==========================
+	/declare paramCount								int local
+	/varcalc paramCount ${rMsg.Count[ ]} + 1
+	/declare cParams[${paramCount}]							string local
+	/declare strCommand								string local
+
+	/varset strCommand ${rMsg.Token[1, ]}
+	/if (${paramCount}) {
+		/for nArray 2 to ${paramCount}
+			/varset cParams[${Math.Calc[${nArray}-1]}] ${rMsg.Token[${nArray}, ]}
+		/next nArray
+	}
+
+	/if (${strCommand.Equal[NULL]}) {
+		| ==========================
+		| NULL
+		| ==========================		
+		/varset hMsg COMPLETED_NOTFOUND
+	} else /if (${strCommand.Equal[pull]}) {
+	| ==========================
+	| Pull [pullPath], Toggles pulling on and off, sets the pull path
+	| ==========================		
+		/if (${cParams[1].NotEqual[NULL]}) {
+			/varset pullPath ${cParams[1]}
+			/if (${pullPath.Equal[default]}) /varset pullPath ${Zone.ShortName}
+			/call EchoLog "Attempting to load pull path ${pullPath}..." TRUE
+			/call ReadINIA Path.ini ${pullPath}
+			/if (!${Defined[LocArray]} && ${pullMode}) { 
+				/call EchoLog "\ayUnable to load pull path will try to pull without a path."
+				| /varset pullMode FALSE
+				/varset pullPath NULL
+			} 
+			/call EchoLog "Pull path loaded successfully" TRUE
+		}
+		/if (${pullMode}) {
+			/varset pullMode FALSE
+		} else {
+			/varset pullMode TRUE
+		}
+		/varset hMsg PullMode set to: \ag${pullMode}
+	} else /if (${strCommand.Equal[pullradius]}) {
+	| ==========================
+	| PullRadius <radius>
+	| ==========================		
+		/if (${cParams[1].NotEqual[NULL]}) {
+			/varset pullRadius ${cParams[1]}
+			/varset hMsg Pulling Radius set to: \ag${pullRadius}
+		} else {
+			/varset hMsg You must specify a new radius, CMD: \agPullRadius <Radius>
+		}
+	}	
+/return ${hMsg}
+
+Sub Event_FDFail(rLine, string sName)
+	/if (${sName.Equal[${Me.CleanName}]}) {
+		/if (${Me.Feigning}) /stand
+		/delay 1s ${Me.Standing}
+		/call MQ2Cast "${fdSpell}" ${fdSlot}
+		/delay 2
+		/doevents FDFail
+	}
+/return
+
+Sub Event_pFocusOn
+	/call EchoLog "Pet Focus On" TRUE
+	/varset pFocus True
+/return
+
+Sub Event_pFocusOff
+	/call EchoLog "Pet Focus Off" TRUE
+	/varset pFocus False
+/return
+
+Sub FDRoutine(string fdTime,string standCondition)
+	/if (!${Defined[fdTime]}) /declare fdTime			string local 0s
+	/if (!${Defined[standCondition]}) /declare standCondition	string local Math.Calc[1] 
+	/declare fdTimer			timer local 0s
+	/if (${fdTime.NotEqual[0s]} || ${Me.PctHPs} < ${FDHP} || (${lTargCount} > 1 && ${Spawn[${mainTank}].PctHPs} < 20 && ${mainTank.NotEqual[NULL]}) || (${lTargCount}==1 && (${Spawn[${mainTank}].Type.Equal[Corpse]} || !${Spawn[${mainTank}].ID}) && ${mainTank.NotEqual[NULL]})) {
+		/if (${Me.Feigning}) /stand
+		/call MQ2Cast "${fdSpell}" ${fdSlot}
+		/delay 2
+		/doevents FDFail
+		/if (${fdTime.NotEqual[0s]}) {
+			/varset fdTimer ${fdTime}
+			:fdWait
+			/if (${fdTimer} && ${Me.CombatState.NotEqual[ACTIVE]}) /goto :fdWait
+			/stand
+		} else {
+			:fdHPWait
+				/call NecroCombatCheck
+				/if (${${standCondtion}}) /stand
+			/if (!${Me.Feinging} || (${Me.PctHPs} < ${FDHPStand} && ${lTargCount}) || (${lTargCount} > 1 && ${Spawn[${mainTank}].PctHPs} < 20 && ${mainTank.NotEqual[NULL]}) || (${lTargCount}==1 && (${Spawn[${mainTank}].Type.Equal[Corpse]} || !${Spawn[${mainTank}].ID}) && ${mainTank.NotEqual[NULL]})) /goto :fdHPWait
+			/stand
+		}
+	}
+/return
+
+Sub HealCheck
+
+/return
+
+Sub LoadSettings
+	| ====================
+	| Load Merc Settings
+	| ====================
+	/declare mercRestMana								int outer 0
+	/declare mercRestToMana							int outer 0
+	/declare mercRestHPs								int outer 0
+	/declare mercRestToHPs							int outer 0
+	/call GetINISetting ${iniName} MercSettings MercRestMana mercRestMana 0
+	/call GetINISetting ${iniName} MercSettings MercRestToMana mercRestToMana 0
+	/call GetINISetting ${iniName} MercSettings MercRestHPs mercRestHPs 0
+	/call GetINISetting ${iniName} MercSettings MercRestToHPs mercRestToHPs 0
+
+	| ===============================
+	| pet settings
+	| ===============================
+	/call EchoLog "Loading pet settings" TRUE
+	/declare petSpell												string outer
+	/declare petSlot												string outer
+	/declare petSummonAtStart								bool outer FALSE
+	/declare petFocusItem										string outer NULL
+	/declare petFDHP												int outer 20
+	/declare petFDStand											int outer 90
+	/declare petHeal												string outer
+	/declare petHealPct											int outer 60
+	/declare petHealSlot										string outer GEM1
+	/declare usePetShrink										bool outer FASLE
+	
+	/call GetINISetting ${iniName} PetSettings PetSpellName petSpell NULL
+	/call GetINISetting ${iniName} PetSettings PetSpellSlot petSlot GEM1
+	/call GetINISetting ${iniName} PetSettings SummonAtStart petSummonAtStart TRUE
+	/call GetINISetting ${iniName} PetSettings PetHasteSpell petBuff[1] NULL
+	/varset petBuffCount 1
+	/varset petBuffText[1] ${petBuff[1]}
+	/varset petBuffSlot[1] ${petSlot}
+	/varset petBuffAuto[1] TRUE
+	/varset petBuffAlias[1] haste
+	/varset petBuffCombat[1] FALSE
+	/varset petBuffEnabled[1] TRUE
+	/call GetINISetting ${iniName} PetSettings PetFocusItem petFocusItem NULL
+	/call GetINISetting ${iniName} PetSettings PetFDHP petFDHP 20
+	/call GetINISetting ${iniName} PetSettings PetFDStand petFDStand 90
+	/call GetINISetting ${iniName} PetSettings PetHeal petHeal NULL
+	/call GetINISetting ${iniName} PetSettings PetHealPct petHealPct 60
+	/call GetINISetting ${iniName} PetSettings PetHealSlot petHealSlot GEM1
+	/call GetINISetting ${iniName} PetSettings ShrinkPet usePetShrink TRUE
+	
+	/call EchoLog "Pet spell: ${petSpell}" TRUE
+	/call EchoLog "Pet haste spell: ${petBuff[1]}" TRUE
+	/call EchoLog "Pet Slot: ${petSlot}" TRUE
+	/call EchoLog "Pet focus item: ${petFocusItem}" TRUE
+	/call EchoLog "Pet Heal: ${petHeal} Percent: ${petHealPct} Slot: ${petHealSlot}" TRUE
+	/call EchoLog "Pet Shrink: ${usePetShrink}" TRUE
+	/call EchoLog "Summon at start: ${petSummonAtStart}" TRUE
+
+
+	| ===============================
+	| Load kite settings
+	| ===============================	
+	/call EchoLog "Loading Solo settings" TRUE
+	/declare kitePath												string outer NULL
+	/declare kiteMoveRadius									int outer 50
+	/declare kitePullRadius									int outer 500
+	/declare kiteSnareSpell									string outer NULL
+	/declare minRestOverMana								int outer 40
+	/declare minRestToMana									int outer 80
+	/declare minRestOverHPs									int outer 70
+	/declare soloMode												bool outer FALSE
+	
+	/call GetINISetting ${iniName} SoloSettings SoloMode soloMode FALSE
+	/call GetINISetting ${iniName} SoloSettings MinMobLvl minMobLvl 1
+	/call GetINISetting ${iniName} SoloSettings MaxMobLvl maxMobLvl 95
+	/call GetINISetting ${iniName} SoloSettings RestMana minRestOverMana 40
+	/call GetINISetting ${iniName} SoloSettings RestHPs minRestOverHPs 70
+	/call GetINISetting ${iniName} SoloSettings RestToMana minRestToMana 80
+	/call GetINISetting ${iniName} SoloSettings KitePath kitePath default
+	/call GetINISetting ${iniName} SoloSettings KiteMoveRadius kiteMoveRadius 100
+	/call GetINISetting ${iniName} SoloSettings KitePullRadius kitePullRadius 500
+	/call GetINISetting ${iniName} SoloSettings SnareSpell kiteSnareSpell NULL
+		
+	/if (${kiteSnareSpell.Equal[NULL]} && ${soloMode}) {
+		/call EchoLog "\ayYou must specify a snare spell to run in solo mode."
+		/varset soloMode FALSE
+	}
+	
+	/if (${soloMode}) {
+		/varset groupMode FALSE
+	} else {
+		/varset groupMode TRUE
+	}
+
+	| ====================	
+	| Load Path
+	| ====================
+	/if (${soloMode}) {
+		/call EchoLog "Attempting to load path ${PathName}..." TRUE
+		/call ReadINIA Path.ini ${kitePath}
+		/if (!${Defined[LocArray]}) { 
+			/call EchoLog "\ayThere is an error in the path, unable to load."
+			/endmacro 
+		}
+		/if (${maxLoc} <= 1) {
+			/call EchoLog "Failed to load a proper path, cannot run in solo mode without one."
+			/endmacro
+		} else {
+			/call EchoLog "Path loaded successfully" TRUE
+		}
+	} else {
+		/varset homeX ${Me.X}
+		/varset homeY ${Me.Y}
+		/varset maxLoc 1
+		/varset LocArray[1] ${homeY},${homeX}
+	}	
+	
+	| ===================================
+	|  Load pull settings
+	| ===================================	
+	|**/call EchoLog "Loading pull settings" TRUE
+	/declare pullMode							bool outer FALSE
+	/declare pullWith							string outer
+	/declare pullGem							string outer
+	/declare pullPath							string outer
+	/declare pullTimeOut					string outer
+	/declare pullRadius						float outer
+	/declare pullZRadius					float outer
+	/declare pullMinLevel					int outer
+	/declare pullMaxLevel					int outer
+	/declare defaultMinMana				int outer
+	/declare defaultMinHP					int outer
+	/declare pullRestTime					string outer
+	/declare pullTimer						timer outer 0s
+	/declare fdOnPull							bool outer FALSE
+	
+	/call GetINISetting ${iniName} "Pull Settings" PullAtStart pullMode FALSE
+	/call GetINISetting ${iniName} "Pull Settings" PullWith pullWith NULL
+	/call GetINISetting ${iniName} "Pull Settings" PullGem pullGem GEM1
+	/call GetINISetting ${iniName} "Pull Settings" PullPathName pullPath Default
+	/call GetINISetting ${iniName} "Pull Settings" PullTimeout pullTimeOut 30s
+	/call GetINISetting ${iniName} "Pull Settings" PullRadius pullRadius 100
+	/call GetINISetting ${iniName} "Pull Settings" PullZRadius pullZRadius 100
+	/call GetINISetting ${iniName} "Pull Settings" PullMinLevel pullMinLevel 1
+	/call GetINISetting ${iniName} "Pull Settings" PullMaxLevel pullMaxLevel 95
+	/call GetINISetting ${iniName} "Pull Settings" DefaultMinMana defaultMinMana 50
+	/call GetINISetting ${iniName} "Pull Settings" DefaultMinHP defaultMinHP 75
+	/call GetINISetting ${iniName} "Pull Settings" PullRestTime pullRestTime 10s
+	/call GetINISetting ${iniName} "Pull Settings" CircuitRestTime circuitRestTime 1m
+	/call GetINISetting ${iniName} "Pull Settings" FDOnPull fdOnPull FALSE
+	/call EchoLog ".....PULLATSTART: ${pullMode} LULLDISC: ${lullDisc} LULLRADIUS: ${lullRadius} PULLWITH: ${pullWith}  PULLTYPE: ${pullType} PULLRADIUS: ${pullRadius} CAMPRETURN: ${returnToCamp} FDONPULL: ${fdOnPull}" TRUE
+
+	/declare defaultMinEnd				int outer
+	/call GetINISetting ${iniName} "Pull Settings" DefaultMinEnd defaultMinEnd 50
+	
+	| ==================	
+	| Load Path
+	| ==================
+	/call SetHome
+
+	/if (${soloMode}) /varset pullPath ${kitePath}
+	/if (${pullPath.Equal[default]}) /varset pullPath ${Zone.ShortName}
+	/call EchoLog "Attempting to load pull path ${pullPath}..." TRUE
+	/call ReadINIA Path.ini ${pullPath}
+	/if (${maxLoc}==1 && ${pullMode}) { 
+		/call EchoLog "\ayUnable to load pull path will try to pull without a path."
+		/varset pullPath NULL
+	} 
+	/if (${pullPath.NotEqual[NULL]}) /call EchoLog ".....Pull path loaded successfully" TRUE		**|
+	
+	| ===============================
+	| Load general
+	| ===============================	
+	/declare lastTargID											int outer 0
+	/declare fdSpell												string outer NULL
+	/declare FDHP														int outer 50
+	/declare FDHPStand											int outer 75
+	/declare fdSlot													string outer gem1
+	/declare fdOnMainDeath									bool outer FALSE
+	/declare deathBloomSpell								string outer NULL
+	/declare deathBloomSlot									string outer
+	/declare deathBloomMinHP								int outer 40
+	/declare deathBloomMaxMana							int outer 60
+	/declare deathBloomReuse								timer outer 0
+	
+	/call GetINISetting ${iniName} General FDSpell fdSpell NULL FALSE
+	/call GetINISetting ${iniName} General FDHP FDHP 50 FALSE
+	/call GetINISetting ${iniName} General FDHPStand FDHPStand 75 FALSE
+	/call GetINISetting ${iniName} General FDSlot fdSlot GEM1 FALSE
+	/call GetINISetting ${iniName} General FDOnMainDeath fdOnMainDeath FALSE FALSE
+	/call GetINISetting ${iniName} General DeathBloomSpell deathBloomSpell NULL FALSE
+	/call GetINISetting ${iniName} General DeathBloomSlot deathBloomSlot GEM1 FALSE
+	/call GetINISetting ${iniName} General DeathBloomMinHP deathBloomMinHP 40 FALSE
+	/call GetINISetting ${iniName} General DeathBloomMaxMana deathBloomMaxMana 60 FALSE
+
+	/call GetINISetting ${iniName} Necro_General FDSpell fdSpell "${fdSpell}"
+	/call GetINISetting ${iniName} Necro_General FDHP FDHP ${FDHP}
+	/call GetINISetting ${iniName} Necro_General FDHPStand FDHPStand ${FDHPStand}
+	/call GetINISetting ${iniName} Necro_General FDSlot fdSlot ${fdSlot}
+	/call GetINISetting ${iniName} Necro_General FDOnMainDeath fdOnMainDeath ${fdOnMainDeath}
+	/call GetINISetting ${iniName} Necro_General DeathBloomSpell deathBloomSpell "${deathBloomSpell}"
+	/call GetINISetting ${iniName} Necro_General DeathBloomSlot deathBloomSlot ${deathBloomSlot}
+	/call GetINISetting ${iniName} Necro_General DeathBloomMinHP deathBloomMinHP ${deathBloomMinHP}
+	/call GetINISetting ${iniName} Necro_General DeathBloomMaxMana deathBloomMaxMana ${deathBloomMaxMana}
+		
+	/call CommonLoad
+	
+	| ===============================
+	| Final Vars
+	| ===============================	
+	/declare currHealTarg										int outer 0
+	/declare currHealID											int outer 0
+	/declare usePet													bool outer FALSE
+	/declare pFocus													bool outer FALSE
+	/declare petRestHPs											int outer	0
+	/declare rested													bool outer FALSE
+	/declare lowmana												bool outer FALSE
+	/declare onlyMed												bool outer FALSE
+	/declare petEngageDly										timer outer 0s
+	/declare pullAttempt										bool outer FALSE
+	/declare meSitting											bool outer FALSE
+	/declare petGuard										bool outer FALSE
+	
+	/varset movVar	1
+	
+	/if (${petSpell.NotEqual[NULL]} && ${petSpell.Length} && ${petSummonAtStart} && (!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]})) /call SummonPet
+	
+	/call EchoLog "NecroBot \agv${meVersion}\ao, written by \awDevestator\ao, initiated"
+	/call EchoLog "Looting Corpses: \ag${lootCorpses}"
+	/call EchoLog "Solo Mode: \ag${soloMode}"
+	/if (${soloMode}) {
+		/call EchoLog "Kite Path: \ag${kitePath}"
+		/call EchoLog "Circular Path: \ag${circularPath}"
+		/if (${maxLoc} > 1) /call SetNearestLoc TRUE
+		/if (${Math.Distance[${LocArray[${curLoc}]}]} > 100) {
+			/call EchoLog "\ayYou are to far from nearest location on this path, ending macro"
+			| /call EchoLog "Nearest loc ${LocArray[${curLoc}]}  Distance: ${Math.Distance[${LocArray[${curLoc}]}]} number ${curLoc}"
+			/endmacro
+		}
+	} else {
+		/call EchoLog "Main Assist: \ag${mainAssist}"
+		/call EchoLog "Assist Pct: \ag${assistPct}"
+	}
+	/call EchoLog "INI FileName: \ag${iniName}"
+/return
+
+Sub LookForMob
+	/declare mLoc							int local 0
+	/declare nID							int local 0
+	/declare abortReason			string local
+	/declare mReturn					string local
+	
+	/varcalc curLoc ${curLoc} + ${movVar}
+	/if (${circularPath}) {
+		/if (${curLoc}>=${maxLoc}) {
+			/varset curLoc 1
+		} else /if (${curLoc}<=1) {
+			/varset curLoc ${maxLoc}
+		}
+	} else {
+		/if (${curLoc}>=${maxLoc}) {
+			/varset movVar -1
+		} else /if (${curLoc}<=1) {
+			/varset movVar 1
+		}		
+	}
+	
+	/varset mLoc ${curLoc}
+	/if (${movVar} > 0) {
+		/call NecroSoloMovement ${curLoc} ${maxLoc} FALSE
+	} else {
+		/call NecroSoloMovement ${curLoc} 1 FALSE
+	}
+	/varset mReturn ${Macro.Return}
+	/call SetNearestLoc
+	/if (${mReturn.Find[ABORT_]}) {
+		/varset abortReason ${mReturn.Right[-6]}
+		/if (${abortReason.NotEqual[TIMEOUT]} && ${abortReason.NotEqual[ROOT]} && ${abortReason.NotEqual[STUCK]} && ${abortReason.NotEqual[SAFE]}) {
+			/if (${abortReason} && ${Spawn[${abortReason}].ID}) {
+				/return ${abortReason}
+			}
+		}
+	}
+/return 0
+
+Sub NecroCombatCheck
+	/call CheckForAdds ${campRadius} ${Me.ID} FALSE TRUE
+	| /if (${targCount}) /call AddCleanUp
+	/if (!${inCombat} && (${lTargCount} > 0 || ${Me.CombatState.Equal[Combat]})) {
+		/varset inCombat TRUE
+		/varset minBuffCheckTimer 10s
+		/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]}) /varset engagePet TRUE
+	}
+	/if (${inCombat} && ${lTargCount} < 1 && ${Me.CombatState.NotEqual[Combat]}) {
+		/varset inCombat FALSE
+		/call AfterCombatRoutines
+		/varset targCount 0
+		/varset corpseCount 0
+		/varset lTargCount 0
+		/varset engagePet FALSE
+		/if (${minBuffCheckTimer} < 150) /varset minBuffCheckTimer 15s
+	}		
+/return
+
+Sub NecroMovementCall
+	/if (${soloMode}) {
+		/if (${inCombat}) {
+			/call SoloPositionCheck ${Math.Calc[${kiteMoveRadius} / 2]}
+			/if (${Macro.Return.Equal[TRUE]}) /call SoloSnareCheck
+			
+			/call SoloPositionCheck 200
+			/if (${Macro.Return.Equal[TRUE]}) /return SAFE
+			
+			/call SoloPositionCheck ${Math.Calc[${kiteMoveRadius} + ${kiteMoveRadius} / 3]}
+			/if (${Macro.Return.Equal[TRUE]}) /return SAFE			
+		} else /if (!${pullAttempt}) {
+		 	| /call Movement ${curLoc} ${curLoc} FALSE
+			/declare nID				int local 0
+		 	/varset nID ${Me.NearestSpawn[npc radius ${kitePullRadius} range ${minMobLvl} ${maxMobLvl} los noalert ${alertList}].ID}
+		 	/if (${nID}) /return ${nID}
+		}
+	}
+/return CONTINUE
+
+Sub PullMobSolo(int pullID)
+	/if (!${pullID}) /return
+	/declare snareResist				bool local FAlSE
+	
+	/varset inCombat FALSE
+	/varset pullAttempt TRUE
+	/call EchoLog "Attempting to pull ${Spawn[${pullID}].CleanName} | ${pullID}" TRUE
+	/if (${Spawn[${pullID}].Distance} > 150) /call NecroSoloMoveToSpawn ${pullID} 150 FALSE
+	/if (${Spawn[${pullID}].Distance} < 150) {
+		/squelch /target ID ${pullID}
+		/delay 1s ${Target.ID}==${pullID}
+		:trySnareSpell
+		/if (${Target.ID} && ${Target.Type.Equal[npc]} && ${Target.Distance} < 150) {
+			/call EchoLog "Attempting to snare ${Spawn[${pullID}].CleanName} | ${pullID}" TRUE
+			/call MQ2Cast "${kiteSnareSpell}"
+			/if (${CastResult.Equal[CAST_SUCCESS]}) {
+				/call SnareTrack ${Target.ID} TRUE
+			} else /if (${CastResult.Equal[CAST_IMMUNE]}) {
+				/call SnareTrack ${Target.ID} TRUE 15m
+			} else /if (${CastResult.Equal[CAST_INTERRUPTED]}) {
+				/call CheckForAggro
+				/if (!${gotAggro}) /goto :trySnareSpell
+			} else /if (${CastResult.Equal[CAST_RESIST]}) {
+				/call FDRoutine 130s
+				/varset snareResist TRUE
+			}
+			/if (!${snareResist}) {
+				/varset targCount 1
+				/varset targArray[1] ${Target.ID}
+				/varset lTargCount 1
+				/varset inCombat TRUE
+			}
+			/call SetNearestLoc TRUE
+			/call NecroSoloMovement ${curLoc} ${curLoc} TRUE
+			/return ${inCombat}
+		}
+	}
+	/varset pullAttempt FALSE
+/return FALSE
+
+Sub Resting(string sforceRestTime)
+	/varset sitTimer 0s
+	/if (!${Defined[sforceRestTime]}) /declare sforceRestTime string local 0s
+	/declare forceRestTime 	timer local ${sforceRestTime}
+	/declare reasonHP	bool local
+	/varset rested FALSE
+	/delay 2
+	/if (!${forceRestTime} && ${Me.PctMana} > 10) /call buffCheck
+	/if (${Me.PctHPs} > ${minRestOverHPs} && (!${Me.Pet.ID} || ${Me.Pet.PctHPs} > ${petRestHPs}) && ${Me.PctMana} > ${minRestOverMana} && !${forceRestTime} && (!${useMerc} || !${mercID} || (${useMerc} && ${mercID} && ${Spawn[${mercID}].PctHPs} > ${mercRestHPs} && ${Spawn[${mercID}].PctMana} > ${mercRestMana}))) {
+		/varset lowmana FALSE
+		/varset rested TRUE
+		/varset onlyMed FALSE
+		/return
+	} else {
+		/if (${Me.PctHPs} < ${minRestOverHPs} || ${Me.Pet.PctHPs} < ${petRestHPs} || (!${useMerc} || !${mercID} || (${useMerc} && ${mercID} && ${Spawn[${mercID}].PctHPs} < ${mercRestHPs}))) {	
+			/if (${Me.PctMana} > ${minRestOverMana} && (!${useMerc} || !${mercID} || (${useMerc} && ${mercID} && ${Spawn[${mercID}].PctMana} > ${mercRestMana}))) {
+				/varset reasonHP TRUE
+			} else {
+				/varset reasonHP FALSE
+			}
+		} else {
+			/varset reasonHP FALSE
+		}
+	}
+	/if (!${groupMode} && ${Me.AltAbilityReady[Perfected Invisibility]}) /call MQ2Cast "Perfected Invisibility" alt
+	/call EchoLog "Entering rest state: HPs: ${Me.PctHPs} Mana: ${Me.PctMana} Pet HPs: ${Me.Pet.PctHPs} Merc HPs: ${Spawn[${merc| Force Rest Time: ${forceRestTime}" TRUE
+	:restLoop
+	/if (${groupMode}) {
+		/assist ${mainAssist}
+		/delay 5
+		/if (${Target.ID} && ${Target.Distance} < ${mobRadius} && ${Target.PctHPs} < ${petAssistPct} && ${Target.LineOfSight} && ${Target.Type.Equal[npc]}) {
+			/varset targArray[1] ${Target.ID}
+			/varset engagePet TRUE
+			/call Combat
+			| /return
+		}
+	}
+	/if (${Me.CombatState.Equal[COMBAT]}) {
+		/if (${Me.Pet.ID}) /assist ${Me.Pet.CleanName}
+		/if (${Target.ID} && ${Target.Type.Equal[NPC]}) {
+			/if (${Target.ID} == ${ignoreID}) {
+				/squelch /target clear
+				/goto :ignored
+			}
+			/if (${Target.ID} == ${Me.Pet.ID}) {
+				/squelch /target clear
+			} else {
+				/call EchoLog "${Target.CleanName} | ${Target.ID} has attacked us exiting rest mode" TRUE
+				/varset targArray[1] ${Target.ID}
+				/call Combat
+				| /return
+			}
+		} else {
+			/squelch /target clear
+		}
+		/if (${Me.Pet.ID} && ${Me.Pet.PctHPs} < ${petHealPct}) /call HealPet
+	}
+	:ignored
+	/if (${Me.PctHPs} > ${minRestOverHPs} && (!${Me.Pet.ID} || ${Me.Pet.PctHPs} > ${petRestHPs}) && !${forceRestTime} && (!${useMerc} || !${mercID} || (${useMerc} && ${mercID} && ${Spawn[${mercID}].PctHPs} >= ${mercRestToHP}))) {
+		/if ((!${reasonHP} && ${Me.PctMana} > ${minRestToMana} && (!${useMerc} || !${mercID} || (${useMerc} && ${mercID} && ${Spawn[${mercID}].PctMana} >= ${mercRestToMana}))) || (${reasonHP} && ${Me.PctMana} > ${minRestOverMana} && (!${useMerc} || !${mercID} || (${useMerc} && ${mercID} && ${Spawn[${mercID}].PctMana} >= ${mercRestMana})))) {
+			/call EchoLog "Rest finished: HPs: ${Me.PctHPs} Mana: ${Me.PctMana} Pet HPs: ${Me.Pet.PctHPs}" TRUE
+			/varset lowmana FALSE
+			/varset rested TRUE
+			/varset onlyMed FALSE
+			/call buffCheck
+			/return
+		}
+	}
+
+	/if (${Me.Moving}) /varset sitTimer 2s
+	/if (!${Me.Sitting} && !${Me.Moving} && !${sitTimer}) /sit
+	/call campCheck
+	/doevents
+	/delay 2s
+	/goto :restLoop
+/return
+
+Sub SnareTrack(int mobID,bool AddTrack,string trackLength)
+	/if (!${Defined[AddTrack]}) /declare AddTrack					bool local FALSE
+	/if (!${Defined[trackLength]}) /declare trackLength		string local ${Math.Calc[${Spell[${kiteSnareSpell}].Duration.TotalSeconds} - 20]}s
+	/if (${AddTrack}) {
+		/if (!${Defined[snareTrack${mobID}]}) /declare snareTrack${mobID}			timer outer 0s
+		/varset snareTrack${mobID} ${trackLength}
+		/return TRUE
+	} else {
+		/if (!${Defined[snareTrack${mobID}]}) {
+			/return FALSE
+		} else {
+			/if (${snareTrack${mobID}}) {
+				/return TRUE
+			} else {
+				/return FALSE
+			}
+		}
+	}
+/return FALSE
+
+Sub SoloMain
+	/call NecroSoloMovementInit
+	
+	/call NecroSoloMovement ${curLoc} ${curLoc} FALSE
+	
+	/call EchoLog "Starting solo mode"
+	/varset MCallRoutine NecroMovementCall
+	:soloMainLoop
+		/doevents
+		/call CommonRoutines
+		/if (!${minBuffCheckTimer}) /call buffCheck
+		
+		/call LookForMob
+		/if (${Macro.Return}) {
+			/call PullMobSolo ${Macro.Return}
+			/if (${Macro.Return.Equal[TRUE]}) {
+				/varset petEngageDly 12s
+				/call SoloCombat
+			}
+		}
+		/delay 1s
+		/call Resting
+	/goto :soloMainLoop
+/return
+
+Sub SoloCombat
+	/declare petTargID				int local 0
+	/declare mobRange					bool local FALSE
+	
+	:soloCombatLoop
+		/call CommonCombatRoutines NULL FALSE TRUE FALSE
+		/call CheckForAdds ${kiteMoveRadius} ${Me.ID} FALSE TRUE
+		/if (${lTargCount} < 1) {
+			/call AfterCombatRoutines
+			/varset targCount 0
+			/varset corpseCount 0
+			/varset lTargCount 0
+			/varset inCombat FALSE
+			/varset engagePet FALSE
+			/if (${minBuffCheckTimer} < 150) /varset minBuffCheckTimer 15s
+			/return
+		}
+		/if (${newAddID}) {
+			/squelch /target ID ${newAddID}
+			/delay 1s ${Target.ID}==${newAddID}
+			/call MQ2Cast "${kiteSnareSpell}"
+			/if (${CastResult.Equal[CAST_SUCCESS]}) {
+				/call SnareTrack ${Target.ID} TRUE
+			} else /if (${CastResult.Equal[CAST_IMMUNE]}) {
+				/call SnareTrack ${Target.ID} TRUE 15m
+			}
+		}
+		/call SoloPositionCheck
+		/if (${Macro.Return.Equal[FALSE]}) /call SoloMoveAhead
+		/call SoloSnareCheck
+		
+		/call ChooseTarget
+		/if (${Target.ID}!=${targID}) {
+			/squelch /target ID ${targID}
+			/delay 1s ${Target.ID}==${targID}
+		}
+		/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]} && ${Me.Pet.Following.ID}!=${targID} && !${petEngageDly}) /pet attack
+		/if (${Target.Distance} <= 200) /call CastSpell NULL TRUE FALSE
+		/if (${SpawnCount[npc radius ${kiteMoveRadius} noalert ${alertList}]}) {
+			/varset mobRange TRUE
+		} else {
+			/varset mobRange FALSE
+		}
+		/if (!${sitTimer} && !${Me.Sitting} && ${allowSit} && !${mobRange}) /sit on
+	/goto :soloCombatLoop
+/return
+
+Sub SoloMoveAhead
+	/varcalc curLoc ${curLoc} + ${movVar}	
+	/if (${circularPath}) {
+			/if (${curLoc} >= ${maxLoc}) {
+		/varset curLoc 1
+		} else /if (${curLoc} <= 1) {
+			/varset curLoc ${maxLoc}
+		}
+	} else {
+		/if (${curLoc} >= ${maxLoc}) {
+			/varcalc movVar ${movVar} * -1
+			/varcalc curLoc ${maxLoc} - 1
+		} else /if (${curLoc} <= 1) {
+			/varcalc movVar ${movVar} * -1
+			/varset curLoc 2
+		}			
+	}
+	/declare mLoc					int local ${curLoc}
+	/call SetFurthestLoc
+	/if (${movVar} > 0 && ${mLoc} > ${curLoc}) {
+		/varset curLoc ${maxLoc}
+	} else /if (${movVar} < 0 && ${mLoc} < ${curLoc}) {
+		/varset curLoc 1
+	}
+	/call NecroSoloMovement ${mLoc} ${curLoc} TRUE
+	/call SetNearestLoc
+	/delay 2
+	/varset sitTimer 2s
+/return
+
+Sub SoloPositionCheck(float distanceCheck)
+	/if (!${Defined[distanceCheck]}) /declare distanceCheck				float local ${Math.Calc[${kiteMoveRadius} - ${kiteMoveRadius} / 3]}
+	/for nArray 1 to ${targCount}
+		/if (${targArray[${nArray}]} && ${Spawn[${targArray[${nArray}]}].ID} && ${Spawn[${targArray[${nArray}]}].Type.NotEqual[Corpse]}) {
+			/if (${Spawn[${targArray[${nArray}]}].Distance} < ${distanceCheck}) {
+				/return FALSE
+			}
+		}
+	/next nArray
+/return TRUE
+
+Sub SoloSnareCheck
+	/declare snCheck				int local 0
+	/for snCheck 1 to ${targCount}
+		/if (${targArray[${snCheck}]} && ${Spawn[${targArray[${snCheck}]}].ID} && ${Spawn[${targArray[${snCheck}]}].Type.NotEqual[Corpse]}) {
+			/call SnareTrack ${targArray[${snCheck}]}
+			/if (${Macro.Return.Equal[FALSE]}) {
+				/squelch /target ID ${targArray[${snCheck}]}
+				/delay 1s ${Target.ID}==${targArray[${snCheck}]}
+				/call MQ2Cast "${kiteSnareSpell}"
+				/if (${CastResult.Equal[CAST_SUCCESS]}) {
+					/call SnareTrack ${Target.ID} TRUE
+				} else /if (${CastResult.Equal[CAST_IMMUNE]}) {
+					/call SnareTrack ${Target.ID} TRUE 15m
+				}
+				/return
+			}
+		}
+	/next snCheck
+/return
+
+Sub SummonPet
+	/declare focusExchanged		bool local FALSE
+	/declare focusSlot				int local 0
+	/declare oldItem					string local
+	/declare shrinkCastCount	int local 0
+	/declare shrinkItemName		string local NULL
+	
+	| Summon the pet if you don't have one.
+	/if (${Me.Pet.Name.Find[familiar]} || !${Me.Pet.ID} && ${Me.CurrentMana} > ${Math.Calc[${Spell[${petSpell}].Mana}+(${Spell[${petSpell}].Mana} * .1)]}) {
+		/call EchoLog "Summoning ${petSpell}" TRUE
+		/pet get lost
+		/if (${petFocusItem.NotEqual[NULL]} && ${FindItem[${petFocusItem}].InvSlot}) {
+			/varset focusSlot ${FindItem[${petFocusItem}].WornSlot[1]}
+			/varset oldItem ${InvSlot[${focusSlot}].Item}
+			/exchange ${petFocusItem} ${focusSlot}
+			/varset focusExchanged TRUE
+			/call EchoLog "Successfully swapped in ${petFocusItem} for pet focus" TRUE
+		}
+		/delay 5
+		/call MQ2Cast "${petSpell}" ${petSlot} 0 CheckForAggro -maxtries|${resistTries}
+		/delay 1s
+		/if (!${Me.Pet.ID}) /call MQ2Cast "${petSpell}" ${petSlot} 0 CheckForAggro -maxtries|${resistTries}
+		/if (!${Me.Pet.ID}) /call EchoLog "\ayPet summoning failed: \ag${CastResult}"
+		/if (${focusExchanged}) {
+			/exchange ${oldItem} ${focusSlot}
+			/call EchoLog "Swapped ${oldItem} back in to replace the pet focus item: ${petFocusItem}" TRUE
+		}
+	} else {
+		/call EchoLog "You already have a pet, not summoning another one" TRUE
+	}
+
+	/if (${Me.Pet.ID} && !${Me.Pet.Name.Find[familiar]} ) {
+		| Focus the pet
+		/pet focus
+		/delay 1s
+		/doevents
+		/if (!${pFocus}) /pet focus
+		
+		| Hold the pet
+		/pet hold on
+	
+		/if (${usePetShrink}) {
+			/if (${Me.AltAbilityReady[Diminutive Companion]}) {
+				/call MQ2Cast "Diminutive Companion" alt
+			} else {
+				/call FindItemWithEffect "Tiny Companion"
+				/varset shrinkItemName ${Macro.Return}
+				/if (${shrinkItemName.NotEqual[NULL]} || ${Me.Book[Tiny Companion]}) {
+					:castShrink
+						/if (${shrinkItemName.NotEqual[NULL]}) {
+							/call MQ2Cast "${shrinkItemName}" Item
+						} else /if (${Me.Book[Tiny Companion]}) {
+							/call MQ2Cast "Tiny Companion" ${petSpellSlot}
+						}
+						/if (${CastResult.Equal[CAST_SUCCESS]}) /varcalc shrinkCastCount ${shrinkCastCount} + 1
+					/if (${shrinkCastCount}<2) /goto :castShrink
+				}
+			}
+		}	
+	}
+/return
+
+Sub Event_petGuard
+	/varset petGuard TRUE
+/return

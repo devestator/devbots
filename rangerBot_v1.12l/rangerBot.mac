@@ -1,0 +1,458 @@
+| =================================================================================================
+| 									   RangerBot v1.12
+| 									Written By: Devestator
+| 													
+| 													
+| USAGE: /macro rangerBot <IniName>
+| 													
+| 													
+| Description:												
+|  This is a bot meant to automate the role of a ranger in a group.							
+| 													
+| 													
+| Requirements:												
+|  MQ2Cast_Spell_Routines.inc										
+|  devMovement.inc
+|  devCommon.inc											
+|  bardBotSettings.ini (you can create custom INIs nameing them bardBotSettings_name.ini			
+|  PLUGIN: MQ2Cast
+|  PLUGIN: MQ2Debuffs													
+|  PLUGIN: MQ2Exchange
+| 
+| v1.12 Update Notes
+|  -Moved ranger general settings from [General] to [Ranger_General].  These settings will default to
+|    what they were in [General] if you already have them set there.  Effected settings:
+|     ArcheryMode,AllowMelee,StayBehind,DoHeals
+|     Also [General] HealCheckTime has been moved to [Priorities] HealCheck
+|  -Updated combat routine to work with the new add detection routine
+|  -Converted to common target routine
+|  -Added ability to combat npc pets
+| 
+| v1.11 Update Notes
+|  -Converted to global pull routine
+| 
+| v1.09 Update Notes
+|  -Updated pull routine to not target mob to check for HPs until it gets closer, and also checks for
+|    unfriend PCs withing a radius of 50 of the mob before going to pull it.
+|  -Changed maximum item / spell range to 180 to accomadate new default /target distance
+| 
+| v1.08 Update Notes
+|  -Updated pull routine to check endurance
+| 
+| v1.07 Update Notes
+|  -Fixed pulling routine to be able to take dead mercs into account
+| 
+| v1.06 Update Notes
+|  -Updated to be able to work as the main assist and choose targets
+|  -Fixed the version error on startup
+|  -Corrected an error in the pull routine
+| 
+| v1.05 Update Notes
+|  -Updated to work with devCommonPremium.inc
+| 
+| v1.04 Update Notes
+|  -Corrected a problem with bot not loading pull path at the start
+| 
+| v1.03 Update Notes
+|  -Corrected a bug in the PositionCheck routine that could cause the bot to return to camp even if
+|    follow mode was on
+| 
+| v1.02 Update Notes
+|  -Added the ability for basic healing
+|  
+| v1.01 Update Notes
+|  -Added the ability to pull
+| 
+| ==================================================================================================
+
+#include devCommonPremium.inc
+|#include rangerBotSettings.ini
+
+Sub main(string iniNameStr)
+	/declare meVersion									float outer 1.12
+	/declare myName											string outer rangerbot
+	/declare myClass										string outer RNG
+	
+	/squelch /mqlog clear
+	
+	/call CommonInit
+	/varset reqCommon	2.36
+	/varset reqMovement  1.65
+	/varset debugMode FALSE
+	
+	/call EchoLog "RangerBot Initialized" true
+	/call EchoLog "Loading variables..." true
+	/if (!${Defined[iniNameStr]}) {
+		/varset iniName rangerBotSettings.ini
+	} else {
+		/if (!${iniNameStr.Equal[default]}) {
+			/varset iniName rangerBotSettings_${iniNameStr}.ini
+		} else {
+			/varset iniName rangerBotSettings.ini
+		}
+	}
+	
+	/call LoadSettings
+	
+	/varset targCount 0
+	/declare currID											int local 0
+	:mainLoop
+		/doevents
+		/call RangerCombatCheck
+		/if (!${inCombat} && !${followMode}) {
+			/if (!${minBuffCheckTimer} && ${Me.PctMana} >= 50) /call buffCheck
+			/call CommonRoutines
+			| /if (${pullMode}) /call PullRoutine
+		} else /if (${inCombat}) {
+			/if (${followMode}) /squelch /stick off
+			/call Combat
+			/if (${followMode}) {
+				/squelch /target ID ${followTargID}
+				/delay 1s ${Target.ID}==${followTargID}
+				/if (${Target.ID} && ${Target.ID}==${followTargID}) {
+					/squelch /stick hold 10
+				} else {
+					/call EchoLog "\ayThe follow target, \ag${followTarg} \aocould not be found again after combat, disabling follow mode."
+					/varset followMode FALSE
+				}
+			}
+		} 
+
+		/if (${Me.Moving}) /varset sitTimer 3s
+		/if (${outOfCombatSit} && ${allowSit} && !${Me.Sitting} && !${sitTimer} && !${Me.Mount.ID} && !${followMode} && !${Me.Casting.ID} && !${Me.Moving}) /sit on
+	/goto :mainLoop
+/return
+
+Sub AfterDeath
+
+/return
+
+Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
+	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/declare hMsg				string local COMPLETED_NOTFOUND
+	/declare rFromID		int local 0
+
+	/varset rFromID ${Spawn[pc ${rFrom}].ID}
+	
+	| ==========================
+	| Bot specific commands
+	| ==========================
+	/declare paramCount								int local
+	/varcalc paramCount ${rMsg.Count[ ]} + 1
+	/declare cParams[20]							string local
+	/declare strCommand								string local
+
+	/varset strCommand ${rMsg.Token[1, ]}
+	/if (${paramCount}) {
+		/for nArray 2 to ${paramCount}
+			/varset cParams[${Math.Calc[${nArray}-1]}] ${rMsg.Token[${nArray}, ]}
+		/next nArray
+	}
+
+	/if (${strCommand.Equal[archery]}) {
+		/if (${archeryMode}) {
+			/varset archeryMode FALSE
+		} else {
+			/varset archeryMode TRUE
+			/call MoveToLoc ${homeY} ${homeX} ${inCombat}
+		}
+		/varset hMsg \aoArchery Mode set to: \ag${archeryMode}
+	} else /if (${strCommand.Equal[pull]}) {
+	| ==========================
+	| Pull [pullPath], Toggles pulling on and off, sets the pull path
+	| ==========================		
+		/if (${cParams[1].NotEqual[NULL]}) {
+			/varset pullPath ${cParams[1]}
+			/if (${pullPath.Equal[default]}) /varset pullPath ${Zone.ShortName}
+			/call EchoLog "Attempting to load pull path ${pullPath}..." true
+			/call ReadINIA Path.ini ${pullPath}
+			/if (!${Defined[LocArray]} && ${pullMode}) { 
+				/call EchoLog "\ayUnable to load pull path will try to pull without a path."
+				| /varset pullMode false
+				/varset pullPath NULL
+			} 
+			/call EchoLog "Pull path loaded successfully" true
+		}
+		/if (${pullMode}) {
+			/varset pullMode FALSE
+		} else {
+			/varset pullMode TRUE
+		}
+		/varset hMsg PullMode set to: \ag${pullMode}
+	} else /if (${strCommand.Equal[pullradius]}) {
+	| ==========================
+	| PullRadius <radius>
+	| ==========================		
+		/if (${cParams[1].NotEqual[NULL]}) {
+			/varset pullRadius ${cParams[1]}
+			/varset hMsg Pulling Radius set to: \ag${pullRadius}
+		} else {
+			/varset hMsg You must specify a new radius, CMD: \agPullRadius <Radius>
+		}		
+	}
+/return ${hMsg}
+
+Sub Combat
+	/declare currID										int local 0
+	/declare tArcheryMode							bool local ${archeryMode}
+	/declare oArcheryMode							bool local ${archeryMode}
+	/declare behindCheck							timer local 0s
+	
+	/call EchoLog "Entering combat." TRUE
+	:combatLoop
+		/doevents
+		/if (${archeryMode}!=${oArcheryMode}) {
+			/varset tArcheryMode ${archeryMode}
+			/varset oArcheryMode ${archeryMode}
+		}
+		/call CombatCheck
+		/if (${inCombat}) {
+			/if (${doHeals} && !${healCheckTimer}) /call HealCheck
+			/call CommonCombatRoutines
+			/call CommonGetTarget
+			/call PositionCheckDefault ${campRadius}
+			/if (${Target.ID} && (${Target.Type.Equal[NPC]} || (${Target.Type.Equal[Pet]} && ${Target.Master.Type.NotEqual[PC]})) && (${Target.PctHPs} <= ${assistPct} || ${mainAssist.Equal[${Me.CleanName}]} || ${mainAssist.Equal[NULL]}) && (${Math.Distance[${homeY},${homeX}:${Target.Y},${Target.X}]} < ${campRadius} || ${Target.Fleeing})) {
+				/if (${tArcheryMode}) {
+					/if (${Math.Abs[${Math.Calc[${Target.HeadingTo.Degrees} - ${Me.Heading.Degrees}]}]} > 50) /face nolook
+					/if (!${Me.AutoFire}) /autofire
+					/if (${Target.Distance} < 40 && ${allowMelee}) {
+						/call EchoLog "\ayTarget is to close for archery mode, switching to melee for this fight"
+						/varset tArcheryMode FALSE
+						/if (${Me.AutoFire}) /autofire
+					}
+				} else {
+					/if (${Target.Distance} > 15)	/call MoveToSpawn ${Target.ID} 12 TRUE
+					/if (${Target.ID} && ${Math.Abs[${Math.Calc[${Target.HeadingTo.Degrees} - ${Me.Heading.Degrees}]}]} > 10) /face nolook
+					/if (${Target.Distance} < 5) {
+						/keypress back hold
+						/delay 2
+						/keypress back
+					}
+					/if (${stayBehind} && !${Stick.Behind} && !${behindCheck}) {
+						/squelch /stick behind ${Target.Distance}
+						/varset behindCheck 10s
+					} else /if (${Stick.Status.Equal[ON]} && ${Stick.Behind}) {
+						/squelch /stick off
+					}
+					/if (!${Me.Combat}) /attack on
+				}
+				
+				/if (${caCount}) {
+					/for nArray 1 to ${caCount}
+						/if (${caName[${nArray}].NotEqual[NULL]}) {
+							/if ((!${Defined[caTimer${nArray}]} || !${caTimer${nArray}}) && (${Me.CombatAbilityReady[${caName[${nArray}]}]} || ${Me.AbilityReady[${caName[${nArray}]}]})) {
+								/doability "${caName[${nArray}]}"
+								:caCast
+								/if (${Me.Casting.ID}) /goto :caCast
+								/if (!${Defined[caTimer${nArray}]}) /declare caTimer${nArray}			timer outer 0s
+								/varset caTimer${nArray} ${caDly[${nArray}]}
+								/goto :exitAbility
+							}
+						}
+					/next nArray
+					:exitAbility
+				}
+				/if (${csCount}) /call CastSpell
+			} else {
+				/call CombatCheck
+				/if (!${inCombat}) {
+					/varset tArcheryMode ${archeryMode}
+					/if (${archeryMode} && !${followMode}) {
+						/if (${Math.Distance[${homeY},${homeX}]} > 30) /call MoveToLoc ${homeY} ${homeX} TRUE
+					}
+				}
+			}
+		} else {
+			/if (${Me.Combat}) /attack off
+			/varset sitTimer ${Math.Calc[1+${Math.Rand[9]}]}s
+			/return
+		}
+	/goto :combatLoop
+/return
+
+Sub LoadSettings
+	| ===================================
+	|  Load general settings
+	| ===================================
+	/declare archeryMode					bool outer FALSE
+	/declare allowMelee						bool outer TRUE
+	/declare stayBehind						bool outer FALSE
+	/declare doHeals							bool outer TRUE
+	/declare healCheckTimerStr		string outer 5s
+	/declare healCheckTimer				timer outer 0s	
+	/declare assistFrequency			string outer 0s
+	/declare assistTimer					timer outer 0s
+
+	/call GetINISetting ${iniName} General ArcheryMode archeryMode FALSE FALSE
+	/call GetINISetting ${iniName} General AllowMelee allowMelee TRUE FALSE
+	/call GetINISetting ${iniName} General StayBehind stayBehind TRUE FALSE
+	/call GetINISetting ${iniName} General DoHeals doHeals FALSE FALSE
+	/call GetINISetting ${iniName} General HealAtStart doHeals ${doHeals} FALSE FALSE
+	/call GetINISetting ${iniName} General HealCheckTime healCheckTimerStr 30s FALSE
+
+	/call GetINISetting ${iniName} Ranger_General ArcheryMode archeryMode ${archeryMode}
+	/call GetINISetting ${iniName} Ranger_General AllowMelee allowMelee ${allowMelee}
+	/call GetINISetting ${iniName} Ranger_General StayBehind stayBehind ${stayBehind}
+	/call GetINISetting ${iniName} Ranger_General DoHeals doHeals ${doHeals}
+	/call GetINISetting ${iniName} Ranger_General HealAtStart doHeals ${doHeals} FALSE
+	/call GetINISetting ${iniName} Priorities HealCheck healCheckTimerStr ${healCheckTimerStr}
+			
+	| ===================================
+	|  Load combat abilities
+	| ===================================
+	/declare caCount							int outer
+	/call GetINIArrayCount ${iniName} CombatAbilities AbilityName NULL
+	/varset caCount ${Macro.Return}
+	/call EchoLog "Loading ${caCount} Combat Abilitie(s)" true
+	/declare caName[${caCount}]		string outer
+	/declare caDly[${caCount}]		string outer
+	
+	/if (${caCount}) {
+		/for nArray 1 to ${caCount}
+			/call GetINISetting ${iniName} CombatAbilities AbilityName${nArray} caName[${nArray}] NULL
+			/call GetINISetting ${iniName} CombatAbilities AbiltyReuse${nArray} caDly[${nArray}] 0s
+			/call EchoLog ".....${nArray} - Name: ${caName[${nArray}]} Reuse Delay: ${caDly[${nArray}]}" true
+		/next nArray
+	}
+	/call GetINISetting ${iniName} CombatAbilities AbilityName${Math.Calc[${caCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} CombatAbilities AbiltyReuse${Math.Calc[${caCount}+1].Int} NULL 0s
+
+	| ====================
+	| Load Heals
+	| ====================
+	/declare healCount											int outer
+	/call GetINIArrayCount ${iniName} Heals HealName
+	/varset healCount ${Macro.Return}
+	/call EchoLog "Loading heals:  ${healCount} heal spell(s)" true
+
+	/declare healSpell[${healCount}]				string outer
+	/declare healSlot[${healCount}]					string outer
+	/declare healMinGroup[${healCount}]			int outer
+	/declare healMinHP[${healCount}]				int outer
+	/declare healMaxHP[${healCount}]				int outer
+	/declare healClasses[${healCount}]			string outer
+	/declare healType[${healCount}]					string outer
+	/declare healAnnounce[${healCount}]			string outer
+	/declare classList											string outer
+	
+	/if (${healCount}) {
+		/for nArray 1 to ${healCount}
+			/call GetINISetting ${iniName} Heals HealName${nArray} healSpell[${nArray}] NULL
+			/call GetINISetting ${iniName} Heals HealSlot${nArray} healSlot[${nArray}] GEM1
+			/call GetINISetting ${iniName} Heals HealMinGroup${nArray} healMinGroup[${nArray}] 1
+			/call GetINISetting ${iniName} Heals HealMinHP${nArray} healMinHP[${nArray}] 1
+			/call GetINISetting ${iniName} Heals HealMaxHP${nArray} healMaxHP[${nArray}] 75
+			/call GetINISetting ${iniName} Heals HealClasses${nArray} healClasses[${nArray}] WAR|SHD|PAL|RNG|MNK|ROG|BRD|BST|BER|SHM|CLR|DRU|WIZ|MAG|ENC|NEC
+			/call GetINISetting ${iniName} Heals HealType${nArray} healType[${nArray}] ALL FALSE
+			/call GetINISetting ${iniName} Heals HealAnnounce${nArray} healAnnounce[${nArray}] NULL
+			/call EchoLog ".....${nArray} - NAME: ${healSpell[${nArray}]} SLOT: ${healSlot[${nArray}]} MINGROUP: ${healMinGroup[${nArray}]} MINHP: ${healMinHP[${nArray}]} MAXHP: ${healMaxHP[${nArray}]} TYPE: ${healType[${nArray}]} CLASSES: ${healClasses[${nArray}]}" true
+			/varset classList ${classList}|${healClasses[${nArray}]}
+		/next nArray
+	}
+	/call GetINISetting ${iniName} Heals HealName${Math.Calc[${healCount}+1].Int} NULL NULL
+	/call GetINISetting ${iniName} Heals HealSlot${Math.Calc[${healCount}+1].Int} NULL GEM1
+	/call GetINISetting ${iniName} Heals HealMinGroup${Math.Calc[${healCount}+1].Int} NULL 1
+	/call GetINISetting ${iniName} Heals HealMinHP${Math.Calc[${healCount}+1].Int} NULL 1
+	/call GetINISetting ${iniName} Heals HealMaxHP${Math.Calc[${healCount}+1].Int} NULL 75
+	/call GetINISetting ${iniName} Heals HealClasses${Math.Calc[${healCount}+1].Int} NULL WAR|SHD|PAL|RNG|MNK|ROG|BRD|BST|BER|SHM|CLR|DRU|WIZ|MAG|ENC|NEC
+	/call GetINISetting ${iniName} Heals HealAnnounce${Math.Calc[${healCount}+1].Int} NULL NULL		
+
+	/call CommonLoad
+	
+	| ===================================
+	|  Finaly Var Setup
+	| ===================================
+	
+	/call EchoLog "RangerBot \agv${meVersion}\ao, written by \awDevestator\ao, initiated"
+	/call EchoLog "Looting Corpses: \ag${lootCorpses}"
+	/call EchoLog "Main Tank: \ag${mainTank}"
+	/call EchoLog "Main Assist: \ag${mainAssist}"
+	/call EchoLog "Puller: \ag${pullerName}"
+	/call EchoLog "INI FileName: \ag${iniName}"
+	/call EchoLog "Debuffing: \ag${doDebuffs}"
+	/call EchoLog "Group Buffing: \ag${doGroupBuffs}"
+	/call EchoLog "Self Buffing: \ag${doSelfBuffs}"
+	/call EchoLog "Archery Mode: \ag${archeryMode}"
+	/call EchoLog "Stay Behind: \ag${stayBehind}"
+	/call EchoLog "Healing: \ag${doHeals}"
+	/if (${doHeals}) /call EchoLog "Heal Check Time: \ag${healCheckTimerStr}"
+/return
+
+Sub RangerCombatCheck(bool AddCheck)
+	/if (!${Defined[AddCheck]}) /declare AddCheck				bool local TRUE
+	/if (${AddCheck}) /call CheckForAdds ${campRadius} ${Me.ID} false true
+	/if (!${inCombat} && (${lTargCount} > 0 || ${Me.CombatState.Equal[Combat]})) {
+		/if (${Me.Sitting}) /stand
+		/varset inCombat true
+		/varset minBuffCheckTimer 10s
+	}
+	/if (${inCombat} && ${lTargCount} < 1 && ${Me.CombatState.NotEqual[Combat]}) {
+		/varset inCombat false
+		/call AfterCombatRoutines
+		/varset targCount 0
+		/varset corpseCount 0
+		/varset lTargCount 0
+		/if (${minBuffCheckTimer} < 150) /varset minBuffCheckTimer 15s
+	}		
+/return
+
+Sub HealCheck
+	/if (!${healCount}) /return
+	/declare hInt					int local 0
+	/declare grpArray			int local 0
+	
+	/for hInt 1 to ${healCount}
+		/if (${healSpell[${hInt}].Equal[NULL]}) /goto :nextHeal
+		/if (${healMinGroup[${hInt}]} > 1) /goto :nextHeal
+		/if (${healSlot[${hInt}].Equal[Item]} && ${FindItem[${healSpell[${hInt}]}].Timer}) /goto :nextHeal
+		/if (${healSlot[${hInt}].Equal[alt]} && !${Me.AltAbilityReady[${healSpell[${hInt}]}]}) /goto :nextHeal
+		/if (${healSlot[${hInt}].Find[Gem]} && ((${Me.Gem[${healSpell[${hInt}]}]} && !${Me.SpellReady[${healSpell[${hInt}]}]}) || !${Me.Gem[${healSpell[${hInt}]}]}) && ${Spell[${healSpell[${hInt}]}].RecastTime} > 2.5) /goto :nextHeal
+		/if  (${Me.CurrentMana} > ${Spell[${healSpell[${hInt}]}].Mana}) {
+			/for grpArray 0 to ${Group.Members}
+				/if (${Group.Member[${grpArray}].PctHPs} <= ${healMaxHP[${hInt}]} && ${Group.Member[${grpArray}].PctHPs} >= ${healMinHP[${hInt}]} && ${Group.Member[${grpArray}].Type.NotEqual[Corpse]}) {
+					/if (${healClasses[${hInt}].Find[${Group.Member[${grpArray}].Class.ShortName}]} || ${healClasses[${hInt}].Find[${Group.Member[${grpArray}].Class.Name}]} || ${healClasses[${hInt}].Find[${Group.Member[${grpArray}].CleanName}]} || ((${healClasses[${hInt}].Find[mt]} || ${healClasses[${hInt}].Find[maintank]}) && (${Group.Member[${gArray}].MainTank} || ${Group.Member[${gArray}].CleanName.Equal[${mainTank}]}))) {
+						/call CastHeal ${hInt} ${Group.Member[${grpArray}].ID}
+						/return
+					}
+				}
+			/next grpArray
+		}
+		:nextHeal
+	/next hInt
+/return
+
+Sub CastHeal(int healNum, int healTargID, string hpWatch)
+	/if (!${Defined[healTargID]} || !${healTargID}) /return
+	/declare sMaxTry				int local ${resistTries}
+	/declare currHealID 		int local 0
+	/declare beforeCastID		int local 0
+	/if (!${Defined[hpWatch]}) /declare hpWatch string local NULL
+	
+	/if (${Me.Casting.ID} && ${allowInterrupt}) /call Interrupt
+	|/varset currHealID ${Spell[${healSpell[${healNum}]}].ID}
+	| /varset currHealTarg ${healTargID}
+	/if (${Spell[${currHealID}].MyCastTime.TotalSeconds} > 5) /varset sMaxTry 1	
+	| /squelch /target clear
+	/varset beforeCastID ${Target.ID}
+	/if (${Target.ID}!=${healTargID}) {
+		/squelch /stick off
+		/squelch /target ID ${healTargID}
+		/delay 2s ${Target.ID}==${healTargID}
+	}
+	/call EchoLog "Attempting to heal ${Target.CleanName} with ${healSpell[${healNum}]} | ${Target.PctHPs}" true
+	/call Announce "${healAnnounce[${healNum}]}"
+	:tryCast
+	| /varset castStart true
+	/call MQ2Cast "${healSpell[${healNum}]}" ${healSlot[${healNum}]}
+	/if (${sMaxTry} == 1 && ${CastResult.Equal[CAST_FIZZLE]}) /goto :tryCast
+	/if (${CastResult.Equal[CAST_SUCCESS]}) {
+		/call EchoLog "Heal cast successfull" true
+		/varset healCheckTimer ${healCheckTimerStr}
+	} else {
+		/call EchoLog "Heal cast failed: ${CastResult}" true
+	}
+	/if (${Target.ID}!=${beforeCastID}) {
+		/squelch /target ID ${beforeCastID}
+		/delay 1s ${Target.ID}==${beforeCastID}
+	}
+/return

@@ -1,0 +1,108 @@
+#event MQ2Cmd "[MQ2] #1#"
+
+Sub main(string pName, string iName, bool rZ)
+	/declare xPos					float outer
+	/declare yPos					float outer
+	/declare zPos					float outer
+	/declare lastX				float outer
+	/declare lastY				float outer
+	/declare lastZ				float outer
+	/declare Location			string outer
+	/declare lastLoc			string outer
+	/declare locNum				int outer
+	/declare locName			string outer
+	/declare lastZoneID		int outer ${Zone.ID}
+	/declare pathName			string outer ${Zone.ShortName}
+	/declare iniName			string outer Path.ini
+	/declare recordZ			bool outer TRUE
+	/declare zoneStr			strin local
+	
+	/if (${Defined[pName]}) /varset pathName ${pName}
+	/if (${Defined[iName]}) /varset iniName ${iName}
+	/if (${Defined[rZ]}) /varset recordZ ${rZ}
+	
+	/if (${iniName.Equal[default]} || ${iniName.Equal[NULL]}) /varset iniName Path.ini
+	/if (!${iniName.Find[.ini]}) /varset iniName ${iniName}.ini
+	
+	/echo Recording the path ${pathName} in the INI ${iniName}
+	/echo Echo Commands (/echo COMMAND):
+	/echo  *DOOR - Adds a door interaction at the current location to the path (will interact with the nearest door), remember Zone objects are doors (like POK books / stones)
+	/echo  *ITEM ItemName - Adds a world item interaction at the current location to the path
+	/echo  *CLICK - Adds a click in the center of the screen at the current location
+	/echo  *PAUSE Time - Adds a delay for the amount of Time specified at the current location (ex /echo PAUSE 5s)
+	/echo  *FACE - Adds a command to face the direction you are currently facing at the current location
+	/echo  *UI Window WindowObject UIAction - Adds a UI notification to the current location, useful for dialogs like the Oggok stone has for zoning (ex /echo UI LargeDialogWindow LDW_OkButton leftmouseup)
+	/echo  *STOP - Stops recording and ends the macro (same as /endmacro)
+	/echo Also note, Zone changes are now recorded in the path as well.  However sometimes your character gets moved before the Zone change actually occurs.  In situations like this, you may see your character start to run in a random direction before Zoning actually starts.  You can manually correct this by going in the path INI and changing the LocX=xx,xx,xx before the INSTRUCTION,ZONECHANGE to IGNORE
+	/doevents flush
+	/if (${Ini[${iniName},${pathName},Value]}>0) {
+		/echo The path name already exists in your ${iniName} file, please choose a different path name or delete the path out of your ${iniName} file
+		/endmacro
+	}
+	
+	/varset locNum 0
+	/varset lastX 0
+	/varset lastY 0
+	/varset lastZ 0
+	/varset lastLoc -100000,-100000,-100000
+	
+	:StartRecord
+		/doevents
+		/varset xPos ${Me.X}
+		/varset yPos ${Me.Y}
+		/varset zPos ${Me.Z}
+		/if (${recordZ}) {
+			/varset Location ${yPos},${xPos},${zPos}
+		} else {
+			/varset Location ${yPos},${xPos}
+		}
+		/if (${Math.Distance[${lastLoc}]}>4 || ${Zone.ID}!=${lastZoneID}) {
+			/if (${Zone.ID}!=${lastZoneID}) {
+				/varset zoneStr INSTRUCTION,ZONECHANGE,${lastZoneID},${Zone.ID}
+				/varset locNum ${Math.Calc[${locNum} + 1]}
+				/varset locName Loc${locNum}
+				/echo Recording ${locName} as ${zoneStr}
+				/ini ${iniName} ${pathName} Value ${locNum}
+				/ini ${iniName} ${pathName} ${locName} ${zoneStr}
+			}
+			/varset locNum ${Math.Calc[${locNum} + 1]}
+			/varset locName Loc${locNum}
+			/echo Recording ${locName} as ${Location}
+			/ini ${iniName} ${pathName} Value ${locNum}
+			/ini ${iniName} ${pathName} ${locName} ${Location}
+			/varset lastX ${xPos}
+			/varset lastY ${yPos}
+			/varset lastZ ${zPos}
+			/varset lastLoc ${yPos},${xPos},${zPos}
+			/varset lastZoneID ${Zone.ID}
+		}
+		/delay 1s
+	/goto :StartRecord
+/return
+
+Sub Event_MQ2Cmd(eventLine, string cmdString)
+	/varset Location NULL
+	/if (${cmdString.Equal[DOOR]}) {
+		/varset Location INSTRUCTION,DOOR
+	} else /if (${cmdString.Left[4].Equal[ITEM]}) {
+		/varset Location INSTRUCTION,ITEM,${cmdString.Right[-5]}
+	} else /if (${cmdString.Left[5].Equal[PAUSE]}) {
+		/varset Location INSTRUCTION,PAUSE,${cmdString.Right[-6]}
+	} else /if (${cmdString.Left[4].Equal[FACE]}) {
+		/varset Location INSTRUCTION,FACE,${Me.Heading.DegreesCCW}
+	} else /if (${cmdString.Equal[STOP]}) {
+		/endmacro
+	} else /if (${cmdString.Left[2].Equal[UI]}) {
+		/varset Location INSTRUCTION,UI,${cmdString.Right[-3]}
+	} else /if (${cmdString.Equal[CLICK]}) {
+		/varset Location INSTRUCTION,CLICK
+	}
+	
+	/if (${Location.NotEqual[NULL]}) {
+		/varset locNum ${Math.Calc[${locNum} + 1]}
+		/varset locName Loc${locNum}
+		/echo Recording ${locName} as ${Location}
+		/ini ${iniName} ${pathName} Value ${locNum}
+		/ini ${iniName} ${pathName} ${locName} "${Location}"
+	}
+/return
