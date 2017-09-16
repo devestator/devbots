@@ -1,11 +1,14 @@
 | ================================================================================
-|                  			EnchanterBot.Mac v1.22
+|                  			EnchanterBot.Mac v1.23
 |                       Written By: Devestator
 | 
 | USAGE: /macro enchanterbot <iniName>
 | 
 | DESCRIPTION:
 |  Automates the role of an enchanter in the group, including the ability to mez.
+| 
+| v1.23 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.22 Update Notes
 |  -Corrected pet attack using [General] AssistPct instead of [PetSettings] PetAssistPct
@@ -97,7 +100,7 @@
 #event MezBroke "#1#has been awakened by#2#"
 
 Sub main(string iniNameStr)
-	/declare meVersion									float outer 1.22
+	/declare meVersion									float outer 1.23
 	/declare myName											string outer enchanterbot
 	/declare myClass										string outer ENC
 	/declare currID											int local 0
@@ -107,19 +110,19 @@ Sub main(string iniNameStr)
 	/mqlog clear
 	
 	/call CommonInit
-	/varset reqCommon	2.36
-	/varset reqMovement  1.60
+	/varset reqCommon	2.51
+	/varset reqMovement  1.74
 	/varset debugMode FALSE
 	
-	/if (${Defined[iniNameStr]}) {
-		/varset iniName enchanterbotsettings_${iniNameStr}.ini
-	} else {
-		/varset iniName enchanterbotsettings.ini
-	}
-	
+
 	/call EchoLog "Enchanterbot Initialized" TRUE
 	/call EchoLog "Loading variables..." TRUE
-	
+	/if (${iniNameStr.Equal[NULL]} || ${iniNameStr.Equal[default]}) {
+		/varset iniName enchanterBotSettings.ini
+	} else {
+		/varset iniName enchanterBotSettings_${iniNameStr}.ini
+	}
+		
 	/call LoadSettings
 	
 	/call EchoLog "Finished loading, starting EnchanterBot v${meVersion}" TRUE
@@ -229,7 +232,7 @@ Sub AfterDeath
 /return
 
 Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
-	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare hMsg				string local COMPLETED_NOTFOUND
 	/declare rFromID		int local 0
 
@@ -535,7 +538,7 @@ Sub MezList(string Action, int AddID, string setTimer)
 /return ${hReturn}
 
 Sub MezVerify(int vID)
-	/if (!${Defined[vID]}) /return TRUE
+	/if (${vID} == NULL) /return TRUE
 	/declare retValue					bool local TRUE
 	
 	/call timer attempts ${vID}
@@ -585,7 +588,7 @@ Sub MezVerify(int vID)
 
 Sub MobMoved(int vID, bool UpdateLoc) 
 	/if (!${Spawn[${vID}].ID} || ${Spawn[${vID}].Type.NotEqual[NPC]}) /return FALSE
-	/if (!${Defined[UpdateLoc]}) /declare UpdateLoc bool local FALSE
+	/if (${UpdateLoc} == NULL) /varset UpdateLoc FALSE
 	/declare retValue				bool local FALSE
 	
 	/if (${Defined[mobX${vID}]}) {

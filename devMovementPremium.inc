@@ -1,10 +1,13 @@
 | ========================================================================================================
-| 					 devMovementPremium.inc V1.73
+| 					 devMovementPremium.inc V1.74
 | 					Written By: Devestator
 | 
 | 
 | Description:
 |  Movement routines used in bots by Devestator
+| 
+| v1.74 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.73 Update Notes
 |  -Tweaked some position check values
@@ -79,10 +82,10 @@
 #event summoned "You have been summoned!"
 
 Sub MovementInit(bool initSilent,bool requireCommon)
-	/if (!${Defined[requireCommon]}) /declare requireCommon bool local TRUE
+	/if (${requireCommon} == NULL) /varset requireCommon TRUE
 	/declare moveRequireCommon			bool outer ${requireCommon}
 	
-	/declare reqDevCommon						float outer 2.48
+	/declare reqDevCommon						float outer 2.51
 	/if (${requireCommon} && (!${Defined[devCommonVer]} || ${devCommonVer} < ${reqDevCommon})) {
 		/echo Cannot load devMovement.inc due to missing incompatible version: devCommon version: ${devCommonVer}, Needed version: ${reqDevCommon}
 		/endm
@@ -90,7 +93,7 @@ Sub MovementInit(bool initSilent,bool requireCommon)
 	/if (!${Defined[initSilent]}) /declare initSilent bool local FALSE
 	
 	/if (!${Defined[devMovementVer]}) {
-		/declare devMovementVer 			float outer 1.73
+		/declare devMovementVer 			float outer 1.74
 		/declare moveCanceled 				bool outer FALSE
 		/declare curLoc 							int outer 0
 		/declare maxMoveTimer 				string outer 5m
@@ -138,15 +141,14 @@ Sub MoveToSpawn(int MoveToID, int StopDistance, bool inCombatMove, bool overRide
 		/mqlog MoveToSpawn:  Spawn ID not found or no ID provided. Aborting... 
 		/return ABORT_NOSPAWN
 	} 
-  /if (!(${Defined[StopDistance]})) { 
+  /if (${StopDistance} == NULL) {
 		/mqlog MoveToSpawn:  Stopping point not defined, using default distance of 20
-    /declare StopDistance int local 
     /varset StopDistance 20
   }
-  /if (!${Defined[inCombatMove]}) /declare inCombatMove bool local FALSE
-	/if (!${Defined[overRideNavigate]}) /declare overRideNavigate bool local FALSE
-	/if (!${Defined[waitForLOS]}) /declare waitForLOS bool local FALSE
-  /if (!${Defined[minimumDistance]}) /declare minimumDistance float local 0
+  /if (${inCombatMove} == NULL) /varset inCombatMove FALSE
+	/if (${overRideNavigate} == NULL) /varset overRideNavigate FALSE
+	/if (${waitForLOS} == NULL) /varset waitForLOS FALSE
+  /if (${minimumDistance} == NULL) /varset minimumDistance 0
   
   /declare running						int local 0
   /declare distanceNow				float local 
@@ -272,13 +274,13 @@ Sub MoveToLoc(float MoveToY, float MoveToX, bool inCombatMove, float MoveToZ, bo
 	/declare useZAxis			bool local
 	/declare moveTimer			timer local
 	
-	/if (!${Defined[inCombatMove]}) /declare inCombatMove bool local false
-	/if (!${Defined[MoveToY]} || !${Defined[MoveToX]}) {
+	/if (${inCombatMove} == NULL) /varset inCombatMove false
+	/if (${MoveToY} == NULL || ${MoveToX} == NULL) {
 		/mqlog The y and or x coordinates were not specified to move to, not attempting movement.
 		/return ABORT_NOCOORDS
 	}
-	/if (!${Defined[MoveToZ]} || ${MoveToZ}==0) {
-		/if (!${Defined[MoveToZ]}) /declare MoveToZ float local 0
+	/if (${MoveToZ} == NULL || ${MoveToZ}==0) {
+		/if (${MoveToZ} == NULL) /varset MoveToZ 0
 		/varset useZAxis FALSE
 		/varset meZ 0
 		/varset moveZ 0
@@ -287,7 +289,7 @@ Sub MoveToLoc(float MoveToY, float MoveToX, bool inCombatMove, float MoveToZ, bo
 		/varset meZ ${Me.Z}
 		/varset moveZ ${MoveToZ}
 	}
-	/if (!${Defined[overRideNavigate]}) /declare overRideNavigate bool local FALSE
+	/if (${overRideNavigate} == NULL) /varset overRideNavigate FALSE
 	
   /varset moveCanceled false
   
@@ -422,9 +424,9 @@ Sub Movement(int Start,int Finish,bool CombatMove,bool ignoreZ,bool fastFace)
 	/declare movePauseTimer	timer local 0s
 	/declare reverseMove		bool local FALSE
 	
-	/if (!${Defined[CombatMove]}) /declare CombatMove bool local FALSE
-	/if (!${Defined[ignoreZ]}) /declare ignoreZ bool local FALSE
-	/if (!${Defined[fastFace]}) /declare fastFace bool local FALSE
+	/if (${CombatMove} == NULL) /varset CombatMove FALSE
+	/if (${ignoreZ} == NULL) /varset ignoreZ FALSE
+	/if (${fastFace} == NULL) /varset fastFace FALSE
 	/if (${curLoc} > ${Finish}) /varset reverseMove TRUE
 	/if (${Me.Feigning} || ${Me.Sitting}) /stand
 	
@@ -529,16 +531,16 @@ Sub Movement(int Start,int Finish,bool CombatMove,bool ignoreZ,bool fastFace)
 	}
 /return ${retValue}
 
-Sub CheckPathExists(PathName,FileName)
-	/if (!${Defined[FileName]}) /declare FileName		string local xxx
+ Sub CheckPathExists(string PathName,string FileName)
+	/if (${FileName.Equal[NULL]}) /varset FileName xxx
 	
 	/call LoadPath ${PathName} ${FileName} FALSE
 /return ${Macro.Return}
 
-Sub LoadPath(PathName,FileName,ReadInPath)
+Sub LoadPath(string PathName,string FileName,bool ReadInPath)
 	/declare fpArray				int local 0
 	/declare pathFound			bool local FALSE
-	/if (!${Defined[ReadInPath]}) /declare ReadInPath		bool local TRUE
+	/if (${ReadInPath} == NULL) /varset ReadInPath TRUE
 	
 	| Attempt to find the path
 	/if (${Defined[FileName]} && ${FileName.NotEqual[NULL]}) {
@@ -567,7 +569,7 @@ Sub LoadPath(PathName,FileName,ReadInPath)
 	/if (!${pathFound}) /call moveLogWrapper "/ag${PathName} /aycould not be found to load."
 /return FALSE
 
-Sub ReadPath(FileName,SectionName)
+Sub ReadPath(string FileName,string SectionName)
 	/declare nValues     	int local 
 	/declare nMArray      int local  0
 	/declare varPrefix		string local Loc
@@ -597,7 +599,7 @@ Sub ReadPath(FileName,SectionName)
 	/varset circularPath ${If[${Math.Distance[${LocArray[1]}:${LocArray[${maxLoc}]}]} < 75,TRUE,FALSE]}
 /return TRUE
 
-Sub ReadINIA(FileName,SectionName)
+Sub ReadINIA(string FileName,string SectionName)
 	/if (${Ini[${FileName},${SectionName},-1,NO].Equal[NO]}) { 
 	  /mqlog "${SectionName}" is not a Valid Section for FILE:${FileName}, ending read
 	  /return 
@@ -622,7 +624,7 @@ Sub SetNearestLoc(bool searchAll)
 	/declare mDistance	int local
 	/declare maLoc		int local
 	/declare miLoc		int local
-	/if (!${Defined[searchAll]}) /declare searchAll bool local false
+	/if (${searchAll} == NULL) /varset searchAll false
 	
 	/varset cDistance 10000
 	/varset cLoc ${curLoc}
@@ -657,7 +659,7 @@ Sub SetFurthestLoc(bool searchAll)
 	/declare mDistance	int local
 	/declare maLoc		int local
 	/declare miLoc		int local
-	/if (!${Defined[searchAll]}) /declare searchAll bool local TRUE
+	/if (${searchAll} == NULL) /varset searchAll TRUE
 	
 	/varset cDistance 0
 	/varset cLoc ${curLoc}
@@ -711,9 +713,9 @@ Sub PositionCheckDefault(float allowedDistance,bool ignorePuller,float maxAllowe
 			/varset pullMode FALSE
 		}
 	}
-	/if (!${Defined[ignorePuller]}) /declare ignorePuller		bool local TRUE
-	/if (!${Defined[allowedDistance]}) /declare allowedDistance		float local ${Math.Calc[${campRadius}*${campReturnRatio}]}
-	/if (!${Defined[maxAllowed]}) /declare maxAllowed				float local 300 
+	/if (${ignorePuller} == NULL) /varset ignorePuller TRUE
+	/if (${allowedDistance} == NULL) /varset allowedDistance ${Math.Calc[${campRadius}*${campReturnRatio}]}
+	/if (${maxAllowed} == NULL) /varset maxAllowed 300 
 	| ${Math.Calc[${allowedDistance} * 3]}
 	/if (${maxAllowed}<${allowedDistance}) /varcalc maxAllowed ${allowDistance}*2
 	/if (!${followMode} && (${ignorePuller} || !${Defined[pullMode]} || !${pullMode}) && ${Math.Distance[${homeY},${homeX}]} > ${allowedDistance}) {
@@ -833,10 +835,10 @@ Sub NavigateToSpawn(int navSpawnID, float stopDistance, bool combatMove, bool wa
 /return NAV_UNKNOWN
 
 Sub SetHome(float newHomeX,float newHomeY,float newHomeZ,float newHomeDir)
-	/if (!${Defined[newHomeX]}) /declare newHomeX float local ${Me.X}
-	/if (!${Defined[newHomeY]}) /declare newHomeY float local ${Me.Y}
-	/if (!${Defined[newHomeZ]}) /declare newHomeZ float local ${Me.Z}
-	/if (!${Defined[newHomeDir]}) /declare newHomeDir float local ${Me.Heading.DegreesCCW}
+	/if (${newHomeX} == NULL) /varset newHomeX ${Me.X}
+	/if (${newHomeY} == NULL) /varset newHomeY ${Me.Y}
+	/if (${newHomeZ} == NULL) /varset newHomeZ ${Me.Z}
+	/if (${newHomeDir} == NULL) /varset newHomeDir ${Me.Heading.DegreesCCW}
 
 	/varset homeX ${newHomeX}
 	/varset homeY ${newHomeY}
@@ -850,8 +852,8 @@ Sub GetHomeDistance
 /return ${homeDistance}
 
 Sub moveLogWrapper(string eMsg, bool logOnly, int msgLevel)
-	/if (!${Defined[logOnly]}) /declare logOnly bool local FALSE
-	/if (!${Defined[msgLevel]}) /declare msgLevel int local 0
+	/if (${logOnly} == NULL) /varset logOnly FALSE
+	/if (${msgLevel} == NULL) /varset msgLevel 0
 	/if (${moveRequireCommon}) {
 		/call EchoLog "${eMsg}" ${logOnly} ${msgLevel}
 	} else {

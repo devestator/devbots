@@ -1,5 +1,5 @@
 | =================================================================================================
-| 									   RogueBot v1.24
+| 									   RogueBot v1.25
 | 									Written By: Devestator
 | 													
 | 													
@@ -18,6 +18,9 @@
 |  PLUGIN: MQ2Cast
 |  PLUGIN: MQ2Debuffs													
 |  PLUGIN: MQ2Exchange
+| 
+| v1.25 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.24 Update Notes
 |  -Added hidden setting [Combat] SneakAttackTimeout=30s.  This will set how long the rogue will wait
@@ -91,28 +94,25 @@
 #event EvadeFail "Your attempts at ducking clear of combat fail."
 
 Sub main(string iniNameStr)
-	/declare meVersion									float outer 1.24
+	/declare meVersion									float outer 1.25
 	/declare myName											string outer roguebot
 	/declare myClass										string outer ROG
 
 	/squelch /mqlog clear
 	
 	/call CommonInit
-	/varset reqCommon	2.36
-	/varset reqMovement  1.65
+	/varset reqCommon	2.51
+	/varset reqMovement  1.74
 	/varset debugMode FALSE
 	
 	/call EchoLog "RogueBot Initialized" true
 	/call EchoLog "Loading variables..." true
-	/if (!${Defined[iniNameStr]}) {
+	/if (${iniNameStr.Equal[NULL]} || ${iniNameStr.Equal[default]}) {
 		/varset iniName rogueBotSettings.ini
 	} else {
-		/if (!${iniNameStr.Equal[default]}) {
-			/varset iniName rogueBotSettings_${iniNameStr}.ini
-		} else {
-			/varset iniName rogueBotSettings.ini
-		}
+		/varset iniName rogueBotSettings_${iniNameStr}.ini
 	}
+	
 	
 	/call LoadSettings
 	
@@ -161,7 +161,7 @@ Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
 	/declare bcArray		int local 0
 	| /declare burnAlias	string local NULL
 	/declare mReturn		int local 0
-	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare hMsg				string local COMPLETED_NOTFOUND
 	/declare rFromID		int local 0
 	/declare burnArray	int local 0
@@ -637,7 +637,7 @@ Sub LoadSettings
 /return
 
 Sub RogueCombatCheck(bool AddCheck)
-	/if (!${Defined[AddCheck]}) /declare AddCheck				bool local TRUE
+	/if (${AddCheck} == NULL) /varset AddCheck TRUE
 	/if (${AddCheck}) /call CheckForAdds ${campRadius} ${Me.ID} false true
 	/if (!${inCombat} && (${lTargCount} > 0 || ${Me.CombatState.Equal[Combat]})) {
 		/if (${Me.Sitting}) /stand
@@ -740,9 +740,9 @@ Sub BurnRoutine
 /return
 
 
-Sub BurnSetUsed(burnSet)
+Sub BurnSetUsed(int burnSet)
 	/if (!${burnSetCount}) /return FALSE
-	/if (!${Defined[burnSet]}) /return FALSE
+	/if (${burnSet} == NULL) /return FALSE
 	/declare bSetArray					int local 0
 	/declare bAbiArray					int local 0
 	
@@ -758,9 +758,9 @@ Sub BurnSetUsed(burnSet)
 	/next bSetArray	
 /return FALSE
 
-Sub BurnSetReady(burnSet)
+Sub BurnSetReady(int burnSet)
 	/if (!${burnSetCount}) /return FALSE
-	/if (!${Defined[burnSet]}) /return FALSE
+	/if (${burnSet} == NULL) /return FALSE
 	/declare bSetArray					int local 0
 	/declare bAbiArray					int local 0
 	/declare tAbi								string local NULL

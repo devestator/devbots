@@ -17,9 +17,9 @@ Sub main(string pName, string iName, bool rZ)
 	/declare recordZ			bool outer TRUE
 	/declare zoneStr			strin local
 	
-	/if (${Defined[pName]}) /varset pathName ${pName}
-	/if (${Defined[iName]}) /varset iniName ${iName}
-	/if (${Defined[rZ]}) /varset recordZ ${rZ}
+	/if (${pName.NotEqual[NULL]}) /varset pathName ${pName}
+	/if (${iName.NotEuqal[NULL]}) /varset iniName ${iName}
+	/if (${rZ} != NULL) /varset recordZ ${rZ}
 	
 	/if (${iniName.Equal[default]} || ${iniName.Equal[NULL]}) /varset iniName Path.ini
 	/if (!${iniName.Find[.ini]}) /varset iniName ${iniName}.ini

@@ -1,5 +1,5 @@
 | =================================================================================================
-| 									   BardBot v1.28
+| 									   BardBot v1.29
 | 									Written By: Devestator
 | 													
 | 													
@@ -19,6 +19,9 @@
 |  PLUGIN: MQ2Debuffs													
 |  PLUGIN: MQ2Exchange
 |  PLUGIN: MQ2MoveUtils
+| 
+| v1.29 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.27 Update Notes
 |  -Added a check to avoid singing songs when CastWhileInvis is false.
@@ -164,21 +167,17 @@ Sub main(string iniNameStr)
 	/squelch /mqlog clear
 	
 	/call CommonInit
-	/varset reqCommon	2.36
-	/varset reqMovement  1.60
+	/varset reqCommon	2.51
+	/varset reqMovement  1.74
 	/varset debugMode FALSE
 	/varset debugLvl 0
 	
 	/call EchoLog "BardBot Initialized" true
 	/call EchoLog "Loading variables..." true
-	/if (!${Defined[iniNameStr]}) {
+	/if (${iniNameStr.Equal[NULL]} || ${iniNameStr.Equal[default]}) {
 		/varset iniName bardBotSettings.ini
 	} else {
-		/if (!${iniNameStr.Equal[default]}) {
-			/varset iniName bardBotSettings_${iniNameStr}.ini
-		} else {
-			/varset iniName bardBotSettings.ini
-		}
+		/varset iniName bardBotSettings_${iniNameStr}.ini
 	}
 	
 	/call LoadSettings
@@ -195,7 +194,7 @@ Sub main(string iniNameStr)
 	/declare oocSongsCount							int local 0
 	:mainLoop
 		/doevents
-		/if (${Me.Aura[1].Equal[${auraSong}]} || ${Me.Aura[2].Equal[${auraSong}]} || ${Me.Aura[1].Equal[${auraText}]} || ${Me.Aura[2].Equal[${auraText}]}) {
+		/if (${Me.Aura[1].Name.Equal[${auraSong}]} || ${Me.Aura[2].Name.Equal[${auraSong}]} || ${Me.Aura[1].Name.Equal[${auraText}]} || ${Me.Aura[2].Name.Equal[${auraText}]}) {
 			| Work around for MQ2 aura bug
 		} else {
 			/if (${auraSong.NotEqual[NULL]} && ${auraGem} && (${castWhileInvis} || !${Me.Invis})) /call CastSong "${auraSong}" ${auraGem}
@@ -253,7 +252,7 @@ Sub AfterDeath
 /return
 
 Sub BardCombatCheck(bool AddCheck)
-	/if (!${Defined[AddCheck]}) /declare AddCheck				bool local TRUE
+	/if (${AddCheck} == NULL) /varset AddCheck TRUE
 	/if (${AddCheck}) /call CheckForAdds ${campRadius} ${Me.ID} false true
 	/if (!${inCombat} && (${lTargCount} > 0 || ${Me.CombatState.Equal[Combat]})) {
 		/if (${Me.Sitting}) /stand
@@ -274,7 +273,7 @@ Sub BardCombatCheck(bool AddCheck)
 /return
 
 Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
-	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare hMsg				string local COMPLETED_NOTFOUND
 	/declare rFromID		int local 0
 
@@ -371,10 +370,10 @@ Sub CastCall
 /return
 
 Sub CastSong(string songName, int songGem, int maxTries, bool endSong, string onCallRoutine, bool immediateInterrupt)
-	/if (!${Defined[songGem]} || !${songGem}) /return
-	/if (!${Defined[maxTries]}) /declare maxTries			int local 2
-	/if (!${Defined[endSong]}) /declare endSong				bool local TRUE
-	/if (!${Defined[immediateInterrupt]}) /declare immediateInterrupt			bool local FALSE
+	/if (${songGem} == NULL || !${songGem}) /return
+	/if (${maxTries} == NULL) /varset maxTries 2
+	/if (${endSong} == NULL) /varset endSong TRUE
+	/if (${immediateInterrupt} == NULL) /varset immediateInterrupt FALSE
 	/declare castTimer					timer local 0s
 	/declare resAttempts				int local 1
 	/declare castTimeout				timer local 0s
@@ -845,8 +844,8 @@ Sub Mez(int mezTargID)
 /return
 
 Sub MezList(string Action, int AddID, string setTimer) 
-	/if (!${Defined[Action]}) /declare Action				string local UPDATE
-	/if (!${Defined[setTimer]}) /declare setTimer		string local ${Spell[${singleMez}].Duration.Float}s
+	/if (${Action.Equal[NULL]}) /varset Action UPDATE
+	/if (${setTimer.Equal[NULL]}) /varset setTimer ${Spell[${singleMez}].Duration.Float}s
 	/declare mlArray							int local 0
 	/declare hReturn							string local FALSE
 	
@@ -953,7 +952,7 @@ Sub MezTimerCheck(int mezTargID)
 /return FALSE
 
 Sub MezVerify(int vID)
-	/if (!${Defined[vID]}) /return TRUE
+	/if (${vID} == NULL) /return TRUE
 	/declare retValue					bool local TRUE
 	
 	/call timer attempts ${vID}

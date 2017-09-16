@@ -1,5 +1,5 @@
 | =================================================================================================
-| 									   SkBot v2.15
+| 									   SkBot v2.16
 | 									Written By: Devestator						
 | 													
 | 													
@@ -20,6 +20,9 @@
 |  PLUGIN: MQ2Cast
 |  PLUGIN: MQ2Debuffs													
 |  PLUGIN: MQ2Exchange
+| 
+| v2.16 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v2.15 Update Notes
 |  -Corrected missing stand check after SK fds.
@@ -88,29 +91,26 @@
 #event petHoldChange "The pet hold mode has been set to #1#."
 
 Sub main(string iniNameStr, string groupRoleStr)
-	/declare meVersion									float outer 2.15
+	/declare meVersion									float outer 2.16
 	/declare myName											string outer skbot2
 	/declare myClass										string outer SHD
 	/declare groupRoleSet	bool outer FALSE
 	
 	/squelch /mqlog clear
 	/call CommonInit
-	/varset reqCommon 2.36
-	/varset reqMovement 1.60
+	/varset reqCommon 2.51
+	/varset reqMovement 1.74
 	/varset debugMode FALSE
 	
 	/call EchoLog "Skbot v${meVersion} Initialized" true
 	/call EchoLog "Loading variables..." true
-	/if (!${Defined[iniNameStr]}) {
+	/if (${iniNameStr.Equal[NULL]} || ${iniNameStr.Equal[default]}) {
 		/varset iniName skBotSettings.ini
 	} else {
-		/if (${iniNameStr.NotEqual[default]}) {
-			/varset iniName skBotSettings_${iniNameStr}.ini
-		} else {
-			/varset iniName skBotSettings.ini
-		}
+		/varset iniName skBotSettings_${iniNameStr}.ini
 	}
-	/if (${Defined[groupRoleStr]}) {
+	
+	/if (${groupRoleStr.NotEqual[NULL]}) {
 		/varset groupRoleSet TRUE
 		/varset groupRole ${groupRoleStr}
 	} else {
@@ -433,7 +433,7 @@ Sub AfterDeath
 /return
 
 Sub BotCommands(string rFrom, string rMsg, bool fromEQBC)
-/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare hMsg				string local COMPLETED_NOTFOUND
 	/declare rFromID		int local 0
 
@@ -723,7 +723,7 @@ Sub SummonPet
 /return
 
 Sub AggroCheckTarg(int mobID)
-	/if (!${Defined[mobID]}) /return true
+	/if (${mobID} == NULL) /return true
 	/if (${Spawn[ID ${mobID}].Type.NotEqual[NPC]}) /return true
 	/declare mobHeading				Float local
 	/declare mobToMeHeading		Float local

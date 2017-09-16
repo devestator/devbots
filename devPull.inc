@@ -1,9 +1,12 @@
 | ======================================================================================================
-| 									devPull.inc v1.09
+| 									devPull.inc v1.10
 | 									Written By - Devestator
 | 
 | Description:
 |  devPull is a include file for dev's bots to handle pulling in any situation any class.
+| 
+| v1.10 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.09 Update Notes
 |  -Added PullPathMaxTime and PullPathMaxTimeN to set maximum time for a pull path even if it is still finding mobs
@@ -77,9 +80,9 @@
 |#include pathrecord.mac
 
 Sub PullInit
-	/declare devPullVer						float outer 1.09
-	/declare devPullReqCommon			float outer 2.39
-	/declare devPullReqMovement		float outer 1.69
+	/declare devPullVer						float outer 1.10
+	/declare devPullReqCommon			float outer 2.51
+	/declare devPullReqMovement		float outer 1.74
 
 	/call EchoLog "Initializing devPull.inc v${devPullVer}"	TRUE
 	/if (${devCommonVer}<${devPullReqCommon}) {
@@ -432,7 +435,7 @@ Sub PullCheckGroup
 /return TRUE
 
 Sub PullCheckLocation(float cDist)
-	/if (!${Defined[cDist]}) /declare cDist			float local ${pullRadius}
+	/if (${cDist} == NULL || ${cDist} == 0) /varset cDist ${pullRadius}
 	/declare mobID							int local 0
 	/declare sNum								int local 0
 	/declare nearestPC					int local 0
@@ -492,8 +495,8 @@ Sub PullCombatCheck
 /return
 
 Sub PullLoadPath(string pullLoadPathName, bool changeMode)
-	/if (!${Defined[pullLoadPathName]}) /return FALSE
-	/if (!${Defined[changeMode]}) /declare changeMode bool local TRUE
+	/if (${pullLoadPathName.Equal[NULL]}) /return FALSE
+	/if (${changeMode} == NULL) /varset changeMode TRUE
 	
 	/call EchoLog "Attempting to load pull path ${pullLoadPathName}..." TRUE
 	/if (${pullLoadPathName.Equal[default]}) /varset pullLoadPathName ${Zone.ShortName}
@@ -510,7 +513,7 @@ Sub PullLoadPath(string pullLoadPathName, bool changeMode)
 /return TRUE
 
 Sub PullMob(int pullID)
-	/if (!${Defined[pullID]} || !${pullID} || !${Spawn[${pullID}].ID}) /return FALSE
+	/if (${pullID} == NULL || !${pullID} || !${Spawn[${pullID}].ID}) /return FALSE
 	/declare lullTarg						int local 0
 	/declare lullCount					int local 0
 	/declare lArray							int local 0
@@ -993,7 +996,7 @@ Sub PullWait
 	/declare currID										int local 0
 	/declare currDir									float local 0
 
-	HIGHERDEBUG "PullWait routine started, pullTimeoutTimer: ${pullTimeoutTimer}" TRUE 2
+	HIGHERDEBUG "PullWait routine started, pullTimeoutTimer: ${pullTimeOut}" TRUE 2
 	/if (${faceAtCamp}) /face Heading ${If[${Me.Heading.DegreesCCW}<180,${Math.Calc[${Me.Heading.DegreesCCW} + 180]},${Math.Calc[${Me.Heading.DegreesCCW} - 180]}]}
 	/if (${pullBandolier.NotEqual[NULL]} && ${normalBandolier.NotEqual[NULL]} && ${bandolierAtCamp}) {
 		/delay 5

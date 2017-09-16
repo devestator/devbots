@@ -1,5 +1,5 @@
 | =================================================================================================
-| 									   NecroBot v1.16
+| 									   NecroBot v1.17
 | 									Written By: Devestator
 | 													
 | 													
@@ -19,6 +19,9 @@
 |  PLUGIN: MQ2Cast
 |  PLUGIN: MQ2Debuffs													
 |  PLUGIN: MQ2Exchange
+| 
+| v1.17 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.16 Update Notes
 |  -Converted to common target routine
@@ -91,7 +94,7 @@
 #event petGuard "#*#Guarding with my life..oh splendid one.#*#"
 
 Sub Main(string iniNameStr)
-	/declare meVersion		float outer 1.16
+	/declare meVersion		float outer 1.17
 	/declare myName				string outer necrobot
 	/declare myClass			string outer NEC
 	/declare resumeFollow	bool local FALSE
@@ -99,21 +102,18 @@ Sub Main(string iniNameStr)
 	/squelch /mqlog clear
 	
 	/call CommonInit
-	/varset reqCommon	2.36
-	/varset reqMovement  1.65
+	/varset reqCommon	2.51
+	/varset reqMovement  1.74
 	/varset debugMode TRUE
 	
 	/call EchoLog "Necrobot Initialized" TRUE
 	/call EchoLog "Loading variables..." TRUE
-	/if (!${Defined[iniNameStr]}) {
+	/if (${iniNameStr.Equal[NULL]} || ${iniNameStr.Equal[default]}) {
 		/varset iniName necroBotSettings.ini
 	} else {
-		/if (!${iniNameStr.Equal[default]}) {
-			/varset iniName necroBotSettings_${iniNameStr}.ini
-		} else {
-			/varset iniName necroBotSettings.ini
-		}
+		/varset iniName necroBotSettings_${iniNameStr}.ini
 	}
+	
 	
 	/call LoadSettings
 	
@@ -211,7 +211,7 @@ Sub AfterDeath
 /return
 
 Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
-	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare hMsg				string local COMPLETED_NOTFOUND
 	/declare rFromID		int local 0
 
@@ -293,8 +293,8 @@ Sub Event_pFocusOff
 /return
 
 Sub FDRoutine(string fdTime,string standCondition)
-	/if (!${Defined[fdTime]}) /declare fdTime			string local 0s
-	/if (!${Defined[standCondition]}) /declare standCondition	string local Math.Calc[1] 
+	/if (${fdTime.Equal[NULL]}) /varset fdTime 0s
+	/if (${standCondition.Equal[NULL]}) /varset standCondition Math.Calc[1] 
 	/declare fdTimer			timer local 0s
 	/if (${fdTime.NotEqual[0s]} || ${Me.PctHPs} < ${FDHP} || (${lTargCount} > 1 && ${Spawn[${mainTank}].PctHPs} < 20 && ${mainTank.NotEqual[NULL]}) || (${lTargCount}==1 && (${Spawn[${mainTank}].Type.Equal[Corpse]} || !${Spawn[${mainTank}].ID}) && ${mainTank.NotEqual[NULL]})) {
 		/if (${Me.Feigning}) /stand
@@ -683,7 +683,7 @@ Sub PullMobSolo(int pullID)
 
 Sub Resting(string sforceRestTime)
 	/varset sitTimer 0s
-	/if (!${Defined[sforceRestTime]}) /declare sforceRestTime string local 0s
+	/if (${sforceRestTime.Equal[NULL]}) /varset sforceRestTime 0s
 	/declare forceRestTime 	timer local ${sforceRestTime}
 	/declare reasonHP	bool local
 	/varset rested FALSE
@@ -759,8 +759,8 @@ Sub Resting(string sforceRestTime)
 /return
 
 Sub SnareTrack(int mobID,bool AddTrack,string trackLength)
-	/if (!${Defined[AddTrack]}) /declare AddTrack					bool local FALSE
-	/if (!${Defined[trackLength]}) /declare trackLength		string local ${Math.Calc[${Spell[${kiteSnareSpell}].Duration.TotalSeconds} - 20]}s
+	/if (${DAddTrack} == NULL) /varset AddTrack FALSE
+	/if (${trackLength.Equal[NULL]}) /declare trackLength ${Math.Calc[${Spell[${kiteSnareSpell}].Duration.TotalSeconds} - 20]}s
 	/if (${AddTrack}) {
 		/if (!${Defined[snareTrack${mobID}]}) /declare snareTrack${mobID}			timer outer 0s
 		/varset snareTrack${mobID} ${trackLength}
@@ -881,7 +881,7 @@ Sub SoloMoveAhead
 /return
 
 Sub SoloPositionCheck(float distanceCheck)
-	/if (!${Defined[distanceCheck]}) /declare distanceCheck				float local ${Math.Calc[${kiteMoveRadius} - ${kiteMoveRadius} / 3]}
+	/if (${distanceCheck} == NULL) /varset distanceCheck ${Math.Calc[${kiteMoveRadius} - ${kiteMoveRadius} / 3]}
 	/for nArray 1 to ${targCount}
 		/if (${targArray[${nArray}]} && ${Spawn[${targArray[${nArray}]}].ID} && ${Spawn[${targArray[${nArray}]}].Type.NotEqual[Corpse]}) {
 			/if (${Spawn[${targArray[${nArray}]}].Distance} < ${distanceCheck}) {

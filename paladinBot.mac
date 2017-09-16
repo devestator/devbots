@@ -1,5 +1,5 @@
 | =================================================================================================
-| 									   PaladinBot v1.07
+| 									   PaladinBot v1.08
 | 									Written By: Devestator						
 | 													
 | 													
@@ -20,6 +20,9 @@
 |  PLUGIN: MQ2Cast
 |  PLUGIN: MQ2Debuffs													
 |  PLUGIN: MQ2Exchange
+| 
+| v1.08 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.07 Update Notes
 |  -Added ability to combat npc pets
@@ -51,29 +54,26 @@
 #event tooFarTaunt "You are too far away from your target to taunt."
 
 Sub main(string iniNameStr, string groupRoleStr)
-	/declare meVersion									float outer 1.07
+	/declare meVersion									float outer 1.08
 	/declare myName											string outer paladinbot
 	/declare myClass										string outer PAL
 	/declare groupRoleSet	bool outer FALSE
 	
 	/squelch /mqlog clear
 	/call CommonInit
-	/varset reqCommon 2.36
-	/varset reqMovement 1.60
+	/varset reqCommon 2.51
+	/varset reqMovement 1.74
 	/varset debugMode FALSE
 	
 	/call EchoLog "PaladinBot v${meVersion} Initialized" true
 	/call EchoLog "Loading variables..." true
-	/if (!${Defined[iniNameStr]}) {
+	/if (${iniNameStr.Equal[NULL]} || ${iniNameStr.Equal[default]}) {
 		/varset iniName paladinBotSettings.ini
 	} else {
-		/if (${iniNameStr.NotEqual[default]}) {
-			/varset iniName paladinBotSettings_${iniNameStr}.ini
-		} else {
-			/varset iniName paladinBotSettings.ini
-		}
+		/varset iniName paladinBotSettings_${iniNameStr}.ini
 	}
-	/if (${Defined[groupRoleStr]}) {
+	
+	/if (${groupRoleStr.NotEqual[NULL]}) {
 		/varset groupRoleSet TRUE
 		/varset groupRole ${groupRoleStr}
 	} else {
@@ -338,7 +338,7 @@ Sub AfterDeath
 /return
 
 Sub BotCommands(string rFrom, string rMsg, bool fromEQBC)
-/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare hMsg				string local COMPLETED_NOTFOUND
 	/declare rFromID		int local 0
 
@@ -642,7 +642,7 @@ Sub MezCheck(int mobID)
 /return ${retValue}
 
 Sub AggroCheckTarg(int mobID)
-	/if (!${Defined[mobID]}) /return true
+	/if (${mobID} == NULL) /return true
 	/if (${Spawn[ID ${mobID}].Type.NotEqual[NPC]}) /return true
 	/declare mobHeading				Float local
 	/declare mobToMeHeading		Float local
@@ -699,7 +699,7 @@ Sub Event_tooFarTaunt
 
 Sub HealCheck(bool secondaryCall)
 	/if (!${healCount}) /return
-	/if (!${Defined[secondaryCall]}) /declare secondaryCall		bool local FALSE
+	/if (${secondaryCall} == NULL) /varset secondaryCall FALSE
 	/declare hInt					int local 0
 	/declare gPets				bool local false
 	/declare grpArray			int local 0
@@ -847,7 +847,7 @@ Sub HealCheck(bool secondaryCall)
 /return
 
 Sub SecondaryHealCheck(bool gPets)
-	/if (!${Defined[gPets]}) /declare gPets			bool local FALSE
+	/if (${gPets} == NULL) /varset gPets FALSE
 	/declare hInt					int local 0
 	/declare groupAvgHP		int local 0
 	/declare avgCount			int local 0
@@ -962,9 +962,9 @@ Sub SecondaryHealCheck(bool gPets)
 /return COMPLETED
 
 Sub CastHeal(int healNum, int healTargID, string hpWatch)
-	/if (!${Defined[healTargID]} || !${healTargID}) /return
+	/if (${healTargID} == NULL || !${healTargID}) /return
 	/declare sMaxTry				int local ${resistTries}
-	/if (!${Defined[hpWatch]}) /declare hpWatch string local EmergencyHeal
+	/if (${hpWatch.Equal[NULL]}) /varset hpWatch EmergencyHeal
 	
 	/if (${Me.Casting.ID} && ${allowInterrupt}) /call Interrupt
 	/varset currHealID ${Spell[${healSpell[${healNum}]}].ID}
@@ -1028,7 +1028,7 @@ Sub EmergencyHeal
 /return
 
 Sub TrackPromise(int playerID, int SpellID)
-	/if (!${Defined[playerID]}) /return
+	/if (${playerID} == NULL) /return
 	/declare pLoop					int local 0
 	/declare pInt						int local 0 
 	
@@ -1049,7 +1049,7 @@ Sub TrackPromise(int playerID, int SpellID)
 /return FALSE
 
 Sub TrackHoT(int playerID, int SpellID)
-	/if (!${Defined[playerID]}) /return
+	/if (${playerID} == NULL) /return
 	/declare pLoop					int local 0
 	/declare pInt						int local 0 
 	

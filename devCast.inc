@@ -1,10 +1,13 @@
 | ========================================================================================================
-| 							 devCast.inc v1.05
+| 							 devCast.inc v1.06
 |     					Written By: Devestator
 | 
 | 
 | Description:
 |  Include file to handle casting without the use of MQ2Cast
+| 
+| v1.06 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.05 Update Notes
 |  -Corrected white mq2chatwnd spam when casting an item
@@ -61,11 +64,11 @@ Sub MQ2CastInit
 /return
 
 Sub devCastInit(bool standAloneRun)
-	/if (!${Defined[standAloneRun]}) /declare standAloneRun bool local FALSE
-	/declare devCastVersion								float outer 1.05
+	/if (${standAloneRun} == NULL) /varset standAloneRun FALSE
+	/declare devCastVersion								float outer 1.06
 	/declare CastResult										string outer CAST_INIT
 	/declare devCastCasting								bool outer FALSE
-	/declare MQ2CastSpellRoutinesVer			float outer 1.03
+	| /declare MQ2CastSpellRoutinesVer			float outer 1.03
 	/declare devCastStandAlone						bool outer ${standAloneRun}
 	
 	/if (!${devCastStandAlone}) /call EchoLog "\awInitializing devCast.inc \agv${devCastVersion}" FALSE
@@ -143,8 +146,7 @@ Sub Cast(string castName, string castSlot, timer castMaxTryTime, string castCall
 	/call Cast_GetSpellRank "${castName}"
 	/varset baseRank ${Macro.Return}
 	
-	/if (!${Defined[castSlot]} || (!${Select[${castSlot},ALT,ITEM,ABILITY,DISC]} && !${castSlot.Find[GEM]})) {
-		/if (!${Defined[castSlot]}) /declare castSlot	string local NULL
+	/if (${castSlot.Equal[NULL]} || (!${Select[${castSlot},ALT,ITEM,ABILITY,DISC]} && !${castSlot.Find[GEM]})) {
 		/varset mySpell ${castName}
 		/if (${Me.AltAbility[${castName}]}) {
 			/varset castSlot ALT
@@ -197,7 +199,7 @@ Sub Cast(string castName, string castSlot, timer castMaxTryTime, string castCall
 	}
 
 
-	/if (!${Defined[castMaxTryTime]}) /declare castMaxTryTime	timer local ${defaultMaxWaitTime}
+	/if (${castMaxTryTime} == NULL) /varset castMaxTryTime ${defaultMaxWaitTime}
 	/if (!${castMaxTryTime}) /varset castMaxTryTime ${defaultMaxWaitTime}
 	
 	/if (${castSlot.Find[GEM]}) {
@@ -277,7 +279,6 @@ Sub Cast(string castName, string castSlot, timer castMaxTryTime, string castCall
 		}
 	}
 
-	/if (!${Defined[castCallRoutine]}) /declare castCallRoutine		string local Cast_DefaultCall
 	/if (!${castCallRoutine.Length} || ${castCallRoutine.Equal[NULL]}) /varset castCallRoutine Cast_DefaultCall
 	
 	/varset devCastCasting TRUE

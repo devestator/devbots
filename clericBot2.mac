@@ -1,5 +1,5 @@
 | =================================================================================================
-| 							   Premium ClericBot v2.26
+| 							   Premium ClericBot v2.27
 | 									Written By: Devestator
 | 													
 | 													
@@ -18,6 +18,9 @@
 |  PLUGIN: MQ2Cast
 |  PLUGIN: MQ2Debuffs
 |  PLUGIN: MQ2Exchange
+| 
+| v2.27 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v2.26 Update Notes
 |  -Corrected typo on Dimnuitive Companion AA cast, it should not correctly use it to shrink pets if configure to.
@@ -139,27 +142,23 @@
 |#include clericBotSettings.ini
 
 Sub main(string iniNameStr)
-	/declare meVersion									float outer 2.26
+	/declare meVersion									float outer 2.27
 	/declare myName											string outer clericbot2
 	/declare myClass										string outer CLR
 	
 	/squelch /mqlog clear
 	
 	/call CommonInit
-	/varset reqCommon	2.36
-	/varset reqMovement  1.62
+	/varset reqCommon	2.51
+	/varset reqMovement  1.74
 	/varset debugMode FALSE
 	
 	/call EchoLog "ClericBot2 v${meVersion} Initialized" true
 	/call EchoLog "Loading variables..." true
-	/if (!${Defined[iniNameStr]}) {
+	/if (${iniNameStr.Equal[NULL]} || ${iniNameStr.Equal[default]}) {
 		/varset iniName clericBotSettings.ini
 	} else {
-		/if (!${iniNameStr.Equal[default]}) {
-			/varset iniName clericBotSettings_${iniNameStr}.ini
-		} else {
-			/varset iniName clericBotSettings.ini
-		}
+		/varset iniName clericBotSettings_${iniNameStr}.ini
 	}
 	
 	/call LoadSettings
@@ -222,7 +221,7 @@ Sub AfterDeath
 /return
 
 Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
-	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare hMsg				string local COMPLETED_NOTFOUND
 	/declare rFromID		int local 0
 
@@ -352,9 +351,9 @@ Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
 /return ${hMsg}
 
 Sub CastHeal(int healNum, int healTargID, string hpWatch)
-	/if (!${Defined[healTargID]} || !${healTargID}) /return
+	/if (${healTargID} == NULL || !${healTargID}) /return
 	/declare sMaxTry				int local ${resistTries}
-	/if (!${Defined[hpWatch]}) /declare hpWatch string local EmergencyHeal
+	/if (${hpWatch.Equal[NULL]}) /varset hpWatch EmergencyHeal
 	
 	/if (${Me.Casting.ID} && ${allowInterrupt}) /call Interrupt
 	/varset currHealID ${Spell[${healSpell[${healNum}]}].ID}
@@ -892,7 +891,7 @@ Sub LoadSettings
 /return
 
 Sub CureCheck(bool ignoreTimer)
-	/if (${cureCheckTimer} && (!${Defined[ignoreTimer]} || !${ignoreTimer})) /return ABORT_TIMER
+	/if (${cureCheckTimer} && (${ignoreTimer} == NULL || !${ignoreTimer})) /return ABORT_TIMER
 	/if (${cureOOCOnly} && ${inCombat}) /return ABORT_COMBAT
 	/declare grpArray					int local 0
 	/declare bArray						int local 0
@@ -1010,7 +1009,7 @@ Sub HealCheck(bool secondaryCall)
 	/if ((${useEpicBalance} || ${useAABalance})) /call EpicAACheck
 	
 	/if (!${healCount}) /return
-	/if (!${Defined[secondaryCall]}) /declare secondaryCall		bool local FALSE
+	/if (${secondaryCall} == NULL) /varset secondaryCall FALSE
 	/declare hInt					int local 0
 	/declare gPets				bool local false
 	/declare grpArray			int local 0
@@ -1285,7 +1284,7 @@ Sub HealCheck(bool secondaryCall)
 /return
 
 Sub SecondaryHealCheck(bool gPets)
-	/if (!${Defined[gPets]}) /declare gPets			bool local FALSE
+	/if (${gPets} == NULL) /declare gPets FALSE
 	/declare hInt					int local 0
 	/declare groupAvgHP		int local 0
 	/declare avgCount			int local 0
@@ -1585,7 +1584,7 @@ Sub RezTarget(int rezTargID, bool ignoreTimer)
 /return UNKNOWN
 
 Sub TrackRez(int rezTargID, bool addTrack)
-	/if (!${Defined[addTrack]}) /declare addTrack				bool local FALSE
+	/if (${addTrack} == NULL) /varset addTrack FALSE
 	
 	/if (!${Defined[rezTrack${rezTargID}]}) /declare rezTrack${rezTargID}			timer outer 0s
 	/if (${addTrack}) {
@@ -1601,7 +1600,7 @@ Sub TrackRez(int rezTargID, bool addTrack)
 /return
 
 Sub TrackPromise(int playerID, int SpellID)
-	/if (!${Defined[playerID]}) /return
+	/if (${playerID} == NULL) /return
 	/declare pLoop					int local 0
 	/declare pInt						int local 0 
 	
@@ -1622,7 +1621,7 @@ Sub TrackPromise(int playerID, int SpellID)
 /return FALSE
 
 Sub TrackHoT(int playerID, int SpellID)
-	/if (!${Defined[playerID]}) /return
+	/if (${playerID} == NULL) /return
 	/declare pLoop					int local 0
 	/declare pInt						int local 0 
 	

@@ -1,5 +1,5 @@
 | ======================================================================================================
-| 																		devLoot.inc v1.36
+| 																		devLoot.inc v1.37
 | 																	Written By - Devestator
 | 
 | Description:
@@ -10,6 +10,9 @@
 | USAGE:  This is primarily intended for use in macros.  /call Loot <corpseID>
 |   This will automatically loot the specified corpseID, or you can leave corpseID blank and it will
 |    loot all corpses within the INI set CorpseRadius.
+| 
+| v1.37 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.36 Update Notes
 |  -Added auto ignoring of lore items that the character already has
@@ -116,7 +119,7 @@ Sub BuildCorpseArray
 /return
 
 Sub BuildINI(string iniBuild)
-	/if (!${Defined[iniBuild]}) /declare iniBuild				string local ${lootINI}
+	/if (${iniBuild.Equal[NULL]}) /varset iniBuild ${lootINI}
 	
 	/ini ${iniBuild} Settings CorpseRadius ${corpseRadius}
 	/ini ${iniBuild} Settings LinkChannel ${linkChannel}
@@ -186,7 +189,7 @@ Sub Event_cannotLoot
 
 Sub Loot(int corpseID)
 	/if (!${Defined[devLootFirstRun]}) /call LootInit
-	/if (!${Defined[corpseID]}) /declare corpseID					int local 0
+	/if (${corpseID} == NULL) /varset corpseID 0
 	/if (!${Defined[clArray]}) /declare clArray						int outer 0
 	
 	/if (${Cursor.ID}) {
@@ -213,7 +216,6 @@ Sub Loot(int corpseID)
 
 Sub LootBank(string bankerName)
 	/if (!${Defined[devLootFirstRun]}) /call LootInit
-	/if (!${Defined[bankerName]}) /declare bankerName					string local NULL
 	/declare invItem						int local 0
 	/declare cItemAction				string local
 	/declare bankType						string local BIGB
@@ -434,7 +436,7 @@ Sub LootCorpse(int corpseID)
 /return LOOT_UNKNOWN
 
 Sub LootEcho(string echoMsg,bool logOnly)
-	/if (!${Defined[logOnly]}) /declare logOnly			bool local FALSE
+	/if (${logOnly} == NULL) /varset logOnly FALSE
 	/if (${Defined[devCommonVer]}) {
 		/call EchoLog "${echoMsg}" ${logOnly}
 	} else {
@@ -445,7 +447,7 @@ Sub LootEcho(string echoMsg,bool logOnly)
 
 Sub LootInit(bool silentLoad, string devLootIniName)
 	/declare devLootVersion			float outer 1.36
-	/if (!${Defined[devLootIniName]}) /declare devLootIniName					string local devLoot.ini
+	/if (${devLootIniName.Equal[NULL]}) /varset devLootIniName devLoot.ini
 	/declare lootINI						string outer ${devLootIniName}
 	/declare linkNoDrop					bool outer true
 	/declare linkLeave					bool outer true
@@ -494,9 +496,9 @@ Sub LootInit(bool silentLoad, string devLootIniName)
 /return
 
 Sub LootItem(int itemNum,bool destItem, string mouseKey)
-	/if (!${Defined[itemNum]}) /return
-	/if (!${Defined[mouseKey]}) /declare mouseKey			string local right
-	/if (!${Defined[destItem]}) /declare destItem			bool local false
+	/if (${itemNum} == NULL) /return
+	/if (${mouseKey.Equal[NULL]}) /varset mouseKey right
+	/if (${destItem} == NULL) /varset destItem false
 	/if (${destItem}) /varset mouseKey Left
 	/declare isNoDrop						bool local false
 
@@ -535,7 +537,6 @@ Sub LootItem(int itemNum,bool destItem, string mouseKey)
 
 Sub LootSell(string merchName)
 	/if (!${Defined[devLootFirstRun]}) /call LootInit
-	/if (!${Defined[merchName]}) /declare merchName					string local NULL
 	/declare invItem						int local 0
 	/declare cItemAction				string local
 	
@@ -624,7 +625,7 @@ Sub lootstrafePastObstacle
 
 Sub LootTracker(int corpseID,bool addTracker)
 	/if (!${Defined[corpseArray]}) /declare corpseArray[1000]							int outer
-	/if (!${Defined[addTracker]}) /declare addTracker											bool local false
+	/if (${addTracker} == NULL) /varset addTracker FALSE
 	/declare ltArray								int local
 	
 	/if (!${addTracker}) {
@@ -665,8 +666,8 @@ Sub LootTrackerClean
 /return
 
 Sub MoveToCorpse(int MoveToID, int StopDistance) 
-	/if (!${Defined[MoveToID]} || !${Spawn[${MoveToID}].ID} || ${Spawn[${MoveToID}].Type.NotEqual[Corpse]}) /return
-  /if (!(${Defined[StopDistance]})) /declare StopDistance int local 20
+	/if (${MoveToID} == NULL || !${Spawn[${MoveToID}].ID} || ${Spawn[${MoveToID}].Type.NotEqual[Corpse]}) /return
+  /if (${StopDistance} == NULL) /varset StopDistance 20
 
   /declare running						int local 0
   /declare distanceNow				float local 
