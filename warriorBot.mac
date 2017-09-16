@@ -1,5 +1,5 @@
 | =================================================================================================
-| 					WarriorBot v1.10
+| 					WarriorBot v1.11
 | 						Written By: Devestator
 | 													
 | 													
@@ -20,6 +20,9 @@
 |  PLUGIN: MQ2Cast
 |  PLUGIN: MQ2Debuffs													
 |  PLUGIN: MQ2Exchange
+| 
+| v1.11 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.10 Update Notes
 |  -Added some distance checks to the combat target selection to prevent warrior from running off after targets really
@@ -67,29 +70,26 @@
 #event failedTaunt "You are too far away from your target to taunt."
 
 Sub main(string iniNameStr, string groupRoleStr)
-	/declare meVersion								float outer 1.10
+	/declare meVersion								float outer 1.11
 	/declare myName										string outer warriorbot
 	/declare myClass									string outer WAR
 	/declare groupRoleSet							bool outer FALSE
 	
 	/squelch /mqlog clear
 	/call CommonInit
-	/varset reqCommon 2.36
-	/varset reqMovement 1.65
+	/varset reqCommon 2.51
+	/varset reqMovement 1.74
 	/varset debugMode FALSE
 	
 	/call EchoLog "WarriorBot v${meVersion} Initialized" TRUE
 	/call EchoLog "Loading variables..." TRUE
-	/if (!${Defined[iniNameStr]}) {
+	/if (${iniNameStr.Equal[NULL]} || ${iniNameStr.Equal[default]}) {
 		/varset iniName warriorBotSettings.ini
 	} else {
-		/if (${iniNameStr.NotEqual[default]}) {
-			/varset iniName warriorBotSettings_${iniNameStr}.ini
-		} else {
-			/varset iniName warriorBotSettings.ini
-		}
+		/varset iniName warriorBotSettings_${iniNameStr}.ini
 	}
-	/if (${Defined[groupRoleStr]}) {
+	
+	/if (${groupRoleStr.NotEqual[NULL]}) {
 		/varset groupRoleSet TRUE
 		/varset groupRole ${groupRoleStr}
 	} else {
@@ -420,7 +420,7 @@ Sub AfterDeath
 /return
 
 Sub BotCommands(string rFrom, string rMsg, bool fromEQBC)
-/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare hMsg				string local COMPLETED_NOTFOUND
 	/declare rFromID		int local 0
 
@@ -676,9 +676,9 @@ Sub HealthCheck
 /return
 
 Sub AggroCheckTarg(int mobID,int targArrayIndex)
-	/if (!${Defined[mobID]}) /return TRUE
+	/if (${mobID} == NULL) /return TRUE
 	/if (${Spawn[ID ${mobID}].Type.NotEqual[NPC]} && (${Spawn[ID ${mobID}].Type.NotEqual[Pet]} || ${Spawn[ID ${mobID}].Master.Type.Equal[PC]})) /return TRUE
-	/if (!${Defined[targArrayIndex]}) /declare targArrayIndex		int local 0
+	/if (${targArrayIndex} == NULL) /varset targArrayIndex 0
 	
 	/declare mobHeading				Float local
 	/declare mobToMeHeading		Float local

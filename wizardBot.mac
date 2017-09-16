@@ -1,5 +1,5 @@
 | =================================================================================================
-| 									   WizardBot v1.12
+| 									   WizardBot v1.13
 | 									Written By: Devestator
 | 													
 | 													
@@ -18,6 +18,9 @@
 |  PLUGIN: MQ2Cast
 |  PLUGIN: MQ2Debuffs													
 |  PLUGIN: MQ2Exchange
+| 
+| v1.13 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v1.12 Update Notes
 |  -Corrected a problem with combat routines running even when out of combat
@@ -68,28 +71,25 @@
 |#include wizardBotSettings.ini
 
 Sub Main(string iniNameStr)
-	/declare meVersion		float outer 1.12
+	/declare meVersion		float outer 1.13
 	/declare myName				string outer wizardbot
 	/declare myClass			string outer WIZ
 	
 	/squelch /mqlog clear
 	
 	/call CommonInit
-	/varset reqCommon	2.36
-	/varset reqMovement  1.60
+	/varset reqCommon	2.51
+	/varset reqMovement  1.74
 	/varset debugMode FALSE
 	
 	/call EchoLog "Wizardbot Initialized" true
 	/call EchoLog "Loading variables..." true
-	/if (!${Defined[iniNameStr]}) {
+	/if (${iniNameStr.Equal[NULL]} || ${iniNameStr.Equal[default]}) {
 		/varset iniName wizardBotSettings.ini
 	} else {
-		/if (!${iniNameStr.Equal[default]}) {
-			/varset iniName wizardBotSettings_${iniNameStr}.ini
-		} else {
-			/varset iniName wizardBotSettings.ini
-		}
+		/varset iniName wizardBotSettings_${iniNameStr}.ini
 	}
+	
 	
 	/call LoadSettings
 	
@@ -172,7 +172,7 @@ Sub AfterDeath
 /return
 
 Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
-	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare hMsg				string local COMPLETED_NOTFOUND
 	/declare rFromID		int local 0
 
@@ -520,9 +520,9 @@ Sub BurnRoutine
 /return
 
 
-Sub BurnSetUsed(burnSet)
+Sub BurnSetUsed(int burnSet)
 	/if (!${burnSetCount}) /return FALSE
-	/if (!${Defined[burnSet]}) /return FALSE
+	/if (${burnSet} == NULL) /return FALSE
 	/declare bSetArray					int local 0
 	/declare bAbiArray					int local 0
 	
@@ -538,9 +538,9 @@ Sub BurnSetUsed(burnSet)
 	/next bSetArray	
 /return FALSE
 
-Sub BurnSetReady(burnSet)
+Sub BurnSetReady(int burnSet)
 	/if (!${burnSetCount}) /return FALSE
-	/if (!${Defined[burnSet]}) /return FALSE
+	/if (${burnSet} == NULL) /return FALSE
 	/declare bSetArray					int local 0
 	/declare bAbiArray					int local 0
 	/declare tAbi								string local NULL

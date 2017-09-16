@@ -1,5 +1,5 @@
 | =================================================================================================
-| 				MageBot2 (Premium MageBot) v4.17
+| 				MageBot2 (Premium MageBot) v4.18
 | 					Written By Devestator
 | 													
 | 													
@@ -18,6 +18,9 @@
 |  PLUGIN: MQ2Cast
 |  PLUGIN: MQ2Debuffs
 |  PLUGIN: MQ2Exchange
+| 
+| v4.18 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v4.17 Update Notes
 |  -Made some changes to pet equipping routine to use changes in MQ2 with /itemnotify and /useitem
@@ -131,21 +134,18 @@ Sub Main(string iniNameStr)
 	/squelch /mqlog clear
 	
 	/call CommonInit
-	/varset reqCommon 2.42
-	/varset reqMovement 1.66
+	/varset reqCommon 2.51
+	/varset reqMovement 1.74
 	/varset debugMode TRUE
 
 	/call EchoLog "MageBot2 Premium Initialized" TRUE
 	/call EchoLog "Loading variables..." TRUE
-	/if (!${Defined[iniNameStr]}) {
+	/if (${iniNameStr.Equal[NULL]} || ${iniNameStr.Equal[default]}) {
 		/varset iniName mageBotSettings.ini
 	} else {
-		/if (!${iniNameStr.Equal[default]}) {
-			/varset iniName mageBotSettings_${iniNameStr}.ini
-		} else {
-			/varset iniName mageBotSettings.ini
-		}
+		/varset iniName mageBotSettings_${iniNameStr}.ini
 	}
+	
 
 	/call LoadSettings
 
@@ -242,7 +242,7 @@ Sub AfterDeath
 /return
 
 Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
-	/if (!${Defined[fromEQBC]}) /declare fromEQBC			local FALSE
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare hMsg				string local COMPLETED_NOTFOUND
 	/declare rFromID		int local 0
 	/declare ePetID			int local 0
@@ -365,7 +365,7 @@ Sub BotCommands(string rFrom,string rMsg, bool fromEQBC)
 /return ${hMsg}
 
 Sub EquipPet(int PetID)
-	/if (!${Defined[PetID]}) /declare PetID int local ${Me.Pet.ID}
+	/if (${PetID} == NULL) /varset PetID ${Me.Pet.ID}
 	
 	/if (!${PetID} || !${Spawn[${PetID}].ID} || ${Spawn[${PetID}].Name.Find[familiar]}) /return
 	| /if (!${Me.Pet.ID} || ${Me.Pet.Name.Find[familiar]}) /return
@@ -475,8 +475,8 @@ Sub Event_spellComponent(string line, string stateType, string stateSetting)
 /return
 
 Sub GiveToPet(bool pressGive, int PetID)
-	/if (!${Defined[pressGive]}) /declare pressGive	bool local TRUE
-	/if (!${Defined[PetID]}) /declare PetID int local ${Me.Pet.ID}
+	/if (${pressGive} == NULL) /varset pressGive TRUE
+	/if (${PetID} == NULL) /varset PetID ${Me.Pet.ID}
 	
 	:targetPetLoop
 		/target ID ${PetID}

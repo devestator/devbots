@@ -1,6 +1,6 @@
 #define HIGHERDEBUG /devecholog
 | ========================================================================================================
-| 					 devCommonPremium.inc v2.50
+| 					 devCommonPremium.inc v2.51
 |     					Written By: Devestator
 | 
 | 
@@ -8,6 +8,9 @@
 |  A compilation of common subs used in multiple macros by Devestator.
 |  Must /call CommonInit before using any subroutines in this include.
 |  Call CommonLoad after you load all settings for your macro.
+| 
+| v2.51 Update Notes
+|  -Updated for 09082017 MQ2 Patch that makes a lot of changes with undefined variables and breaks function calls relying on Not defined to set defaults
 | 
 | v2.50 Update Notes
 |  -Update respite discs
@@ -77,7 +80,6 @@
 
 #turbo 80
 
-|#include devMQ2Cast_Spell_Routines.inc
 #include devCast.inc
 #include devMovementPremium.inc
 #include devLoot.inc
@@ -125,10 +127,10 @@
 
 Sub CommonInit
 	/squelch /alias /devecholog /call EchoLog
-	/declare devCommonVer								float outer 2.50
-	/declare reqMovementCommon						float outer 1.73
-	/declare reqCastCommon								float outer 1.04
-	/declare reqPullCommon								float outer 1.06
+	/declare devCommonVer								float outer 2.51
+	/declare reqMovementCommon						float outer 1.74
+	/declare reqCastCommon								float outer 1.06
+	/declare reqPullCommon								float outer 1.10
 	/squelch /plugin MQ2Debuffs
 	/squelch /plugin MQ2Exchange
 	/squelch /plugin MQ2CEcho
@@ -139,22 +141,22 @@ Sub CommonInit
 	| =====================================================================
 	| Declare supported bot versions
 	| =====================================================================	
-	/declare bardbot									float outer 1.13
-	/declare beastlordbot								float outer 1.01
-	/declare berserkerbot								float outer 1.04
-	/declare clericbot2									float outer 2.00
-	/declare druidbot									float outer 1.04
-	/declare enchanterbot								float outer 1.08
-	/declare magebot2									float outer 4.00
-	/declare monkbot									float outer 1.07
-	/declare necrobot									float outer 1.03
-	/declare paladinbot									float outer 1.00
-	/declare rangerbot									float outer 1.12
-	/declare roguebot									float outer 1.00
-	/declare shamanbot									float outer 1.05
-	/declare skbot2										float outer 2.00
-	/declare warriorbot									float outer 1.00
-	/declare wizardbot									float outer 1.03
+	/declare bardbot									float outer 1.29
+	/declare beastlordbot								float outer 1.11
+	/declare berserkerbot								float outer 1.10
+	/declare clericbot2									float outer 2.27
+	/declare druidbot									float outer 1.15
+	/declare enchanterbot								float outer 1.23
+	/declare magebot2									float outer 4.18
+	/declare monkbot									float outer 1.24
+	/declare necrobot									float outer 1.17
+	/declare paladinbot									float outer 1.08
+	/declare rangerbot									float outer 1.13
+	/declare roguebot									float outer 1.25
+	/declare shamanbot									float outer 1.25
+	/declare skbot2										float outer 2.16
+	/declare warriorbot									float outer 1.11
+	/declare wizardbot									float outer 1.13
 	
 	| =====================================================================
 	| Declare general variables
@@ -240,6 +242,7 @@ Sub CommonInit
 		/squelch /alias /myecho /echo
 		/varset colorEcho FALSE
 	}
+	
 	/if (${isMMOBugs} && ${Me.AltAbility[Eyes Wide Open]}) {
 		/varset maxXTargets ${Me.MaxXTarget}
 	} else {
@@ -961,7 +964,7 @@ Sub CommonLoad
 /return
 
 Sub CombatCheck(bool AddCheck)
-	/if (!${Defined[AddCheck]}) /declare AddCheck				bool local TRUE
+	/if (${AddCheck} == NULL) /varset AddCheck TRUE
 	/if (${AddCheck}) /call CheckForAdds ${campRadius} ${Me.ID} FALSE TRUE
 	/if (!${inCombat} && (${lTargCount} > 0 || ${Me.CombatState.Equal[Combat]})) {
 		/varset inCombat TRUE
@@ -998,11 +1001,11 @@ Sub CommonCombatRoutines(string callRoutine,bool AllowCombatBuff,bool AllowDebuf
 	
 	/if (${Me.State.Equal[HOVER]}) /call Event_died
 	
-	/if (!${Defined[AllowCombatBuff]}) /declare AllowCombatBuff				bool local TRUE
-	/if (!${Defined[AllowDebuff]}) /declare AllowDebuff								bool local TRUE
-	/if (!${Defined[AllowAddCleanup]}) /declare AllowAddCleanup				bool local TRUE
-	/if (!${Defined[LastMercAssistID]}) /declare LastMercAssistID			int outer 0
-	/if (${Defined[callRoutine]}) {
+	/if (${AllowCombatBuff} == NULL) /varset AllowCombatBuff TRUE
+	/if (${AllowDebuff]} == NULL) /varset AllowDebuff TRUE
+	/if (${AllowAddCleanup]} == NULL) /varset AllowAddCleanup TRUE
+	/if (!${Defined[LastMercAssistID]}) /declare LastMercAssistID		int outer 0
+	/if (${callRoutine.NotEqual[NULL]}) {
 		/varset inCombatBuffRoutine ${callRoutine}
 	} else {
 		/varset inCombatBuffRoutine NULL
@@ -1098,7 +1101,8 @@ Sub CommonRoutines(bool pullCheck)
 	
 	/if (${Me.State.Equal[HOVER]}) /call Event_died
 	
-	/if (!${Defined[pullCheck]}) /declare pullCheck bool local TRUE
+	| /if (!${Defined[pullCheck]}) /declare pullCheck bool local TRUE
+	/if (${pullCheck} == NULL) /varset pullCheck TRUE
 	/if (${followMode}) /call SetHome
 	/call campCheck
 	| /call TradeCheck
@@ -1185,7 +1189,7 @@ Sub CommonRoutines(bool pullCheck)
 /return
 
 Sub AddIgnoreMob(string addName)
-	/if (${addName.Equal[null]}) /return
+	/if (${addName.Equal[NULL]}) /return
 	
 	/varcalc ignoreMobsCount ${ignoreMobsCount}+1
 	/varset ignoreMobs[${ignoreMobsCount}] ${addName}
@@ -1212,7 +1216,7 @@ Sub RemoveIgnoreMob(string removeName)
 /return
 
 Sub AddSafePC(string addName)
-	/if (${addName.Equal[null]}) /return
+	/if (${addName.Equal[NULL]}) /return
 	
 	/varcalc safePCCount ${safePCCount}+1
 	/varset safePC[${safePCCount}] ${addName}
@@ -1239,7 +1243,7 @@ Sub RemoveSafePC(string removeName)
 /return
 
 Sub AfterCombatRoutines(bool lootReturn)
-	/if (!${Defined[lootReturn]}) /declare lootReturn			bool local TRUE
+	/if (${lootReturn} == NULL) /varset lootReturn TRUE
 	/declare acArray			int local
 	
 	/if (${Me.Combat}) /attack off
@@ -1311,12 +1315,12 @@ Sub AlertsCheck(int mobID)
 	/declare aZero	int local 
 	
 	/if (!${mobAlertsValue}) /return
-	/if (!${Defined[mobID]}) {
+	/if (${mobID} == NULL) {
 		/if (${Target.ID}) {
-			/declare mobID	int local ${Target.ID}
+			/varset mobID ${Target.ID}
 		} else {
 			/if (${lTargCount}<1) /return
-			/declare mobID int local 0
+			/varset mobID 0
 		}
 	}
 
@@ -1374,9 +1378,9 @@ Sub AlertsCheck(int mobID)
 /return
 
 Sub CastBuff(int buffTargID, int buffNum, string buffType, string singGroup, bool silentMode, string castCallRoutine)
-	/if (!${Defined[singGroup]}) /declare singGroup			string local Single
-	/if (!${Defined[silentMode]}) /declare silentMode		bool local FALSE
-	/if (!${Defined[castCallRoutine]}) /declare castCallRoutine	string local CheckForAggro
+	/if (${singGroup.Equal[NULL]}) /varset singGroup Single
+	/if (${silentMode} == NULL) /varset silentMode FALSE
+	/if (${castCallRoutine.Equal[NULL]}) /varset castCallRoutine CheckForAggro
 	/if (!${castCallRoutine.Length} || ${castCallRoutine.Equal[NULL]}) /varset castCallRoutine CheckForAggro
 	
 	/declare buffString					string local groupBuff${singGroup}
@@ -1523,7 +1527,7 @@ Sub CastBuff(int buffTargID, int buffNum, string buffType, string singGroup, boo
 Sub FindPotionBelt(string PotionName)
 	/declare pbArray						int local 0
 
-	/if (!${Defined[PotionName]}) /return FALSE
+	/if (${PotionName.Equal[NULL]}) /return FALSE
 	/for pbArray 0 to 4
 		/if (${Window[PotionBeltWnd].Child[PW_PotionSlot${pbArray}_Button].Tooltip.Equal[${PotionName}]} && ${Window[PotionBeltWnd].Child[PW_PotionSlot${pbArray}_Label].Text}>0) {
 			/return TRUE
@@ -1552,8 +1556,8 @@ Sub CastPotionBelt(string PotionName, string CallRoutine) {
 	/declare pbArray						int local 0
 	/declare retValue						string local POTIONCAST_UNKNOWN
 	
-	/if (!${Defined[PotionName]}) /return POTIONCAST_NOTFOUND
-	/if (!${Defined[CallRoutine]}) /declare CallRoutine		string local NULL
+	/if (${PotionName.Equal[NULL]}) /return POTIONCAST_NOTFOUND
+	/if (${CallRoutine.Equal[NULL]}) /varset CallRoutine NULL
 	/if (!${Defined[PBCasting]}) /declare PBCasting				bool outer FALSE
 	/if (!${Defined[PBFailReason]}) /declare PBFailReason	string outer SUCCESS
 	/for pbArray 0 to 4
@@ -1614,9 +1618,8 @@ Sub Event_PBCastFail(string rLine)
 
 Sub buffCheck(bool useTimer, bool combatBuff, string onCallRoutine)
 	/if (!${castWhileInvis} && ${Me.Invis}) /return ABORT_INVIS
-	/if (!${Defined[useTimer]}) /declare useTimer bool local TRUE
-	/if (!${Defined[combatBuff]}) /declare combatBuff bool local FALSE
-	/if (!${Defined[onCallRoutine]}) /declare onCallRoutine string local NULL
+	/if (${useTimer} == NULL) /varset useTimer TRUE
+	/if (${combatBuff} == NULL) /varset combatBuff FALSE
 	/if (${useTimer} && ${minBuffCheckTimer}) /return ABORT_TIMER
 	/if (${selfBuffCount} == 0 && (!${Me.Pet.ID} || ${petBuffCount} == 0) && (${groupBuffCount} == 0 || !${Group.Members}) && (!${watchCount} || !${groupBuffCount}) && !${autoBuffCount}) /return ABORT_NOBUFFS
 
@@ -1636,7 +1639,7 @@ Sub buffCheck(bool useTimer, bool combatBuff, string onCallRoutine)
 /return
 
 Sub buffCheckNeeded(string checkBuffName, string checkBuffSpell, string targVariable, float gbMod)
-	/if (!${Defined[gbMod]}) /declare gbMod int local 0
+	/if (${gbMod} == NULL) /varset gbMod 0
 	/if (${checkBuffName.Equal[NULL]} && ${checkBuffSpell.Equal[NULL]}) /return FALSE
 	/if (${checkBuffName.Equal[NULL]} && ${checkBuffSpell.NotEqual[NULL]}) /varset checkBuffName ${checkBuffSpell}
 	/if (!${${targVariable}[${checkBuffName}].ID} || ${${targVariable}[${checkBuffName}].Duration.TotalSeconds} < ${Math.Calc[${Spell[${checkBuffSpell}].Duration.TotalSeconds}/10+${gbMod}]}) {
@@ -1646,10 +1649,9 @@ Sub buffCheckNeeded(string checkBuffName, string checkBuffSpell, string targVari
 /return FALSE
 
 Sub buffCheckRoutine(string checkTypes, bool combatBuff, string onCallRoutine)
-	/if (!${Defined[combatBuff]}) /declare combatBuff bool local FALSE
-	/if (!${Defined[onCallRoutine]}) /declare onCallRoutine string local NULL
-	/if (!${Defined[checkTypes]}) /declare checkTypes string local ALL
-	
+	/if (${combatBuff} == NULL) /varset combatBuff FALSE
+	/if (${checkTypes.Equal[NULL]}) /varset checkTypes ALL
+
 	/call EchoLog "Checking buffs (${checkTypes})- In Combat: ${combatBuff}" TRUE
 
 	/declare bArray							int local 0
@@ -1698,7 +1700,7 @@ Sub buffCheckRoutine(string checkTypes, bool combatBuff, string onCallRoutine)
 				/if (${autoBuff[${nArray}].NotEqual[NULL]} && ${autoBuffEnabled[${nArray}]} && ${autoBuffAuto[${nArray}]} && ${autoBuffCombat[${nArray}]}==${combatBuff}) {
 					/if (${Spell[${autoBuff[${nArray}]}].Stacks} || ${Spell[${autoBuffText[${nArray}]}].Stacks}) {
 						/if (${autoBuffText[${nArray}].NotEqual[NULL]}) {
-							/if (${Me.Aura[1].Equal[${autoBuffText[${nArray}]}]} || ${Me.Aura[1].Equal[${autoBuff[${nArray}]}]} || ${Me.Aura[2].Equal[${autoBuffText[${nArray}]}]} || ${Me.Aura[2].Equal[${autoBuff[${nArray}]}]}) {
+							/if (${Me.Aura[1].Name.Equal[${autoBuffText[${nArray}]}]} || ${Me.Aura[1].Name.Equal[${autoBuff[${nArray}]}]} || ${Me.Aura[2].Name.Equal[${autoBuffText[${nArray}]}]} || ${Me.Aura[2].Name.Equal[${autoBuff[${nArray}]}]}) {
 								| Work around for MQ2 aura bug
 							} else {
 								/if ((!${Me.Buff[${autoBuffText[${nArray}]}].ID} || ${Me.Buff[${autoBuffText[${nArray}]}].Duration} <= ${Math.Calc[${Spell[${autoBuff[${nArray}]}].Duration.TotalSeconds}/10]}) && !${Me.Song[${autoBuffText[${nArray}]}].ID}) {
@@ -1710,7 +1712,7 @@ Sub buffCheckRoutine(string checkTypes, bool combatBuff, string onCallRoutine)
 								}
 							}
 						} else {
-							/if (${Me.Aura[1].Equal[${autoBuff[${nArray}]}]} || ${Me.Aura[2].Equal[${autoBuff[${nArray}]}]}) {
+							/if (${Me.Aura[1].Name.Equal[${autoBuff[${nArray}]}]} || ${Me.Aura[2].Name.Equal[${autoBuff[${nArray}]}]}) {
 								| Work around for MQ2 aura bug
 							} else {
 								/if ((!${Me.Buff[${autoBuff[${nArray}]}].ID} ||  ${Me.Buff[${autoBuff[${nArray}]}].Duration} <= ${Math.Calc[${Spell[${autoBuff[${nArray}]}].Duration.TotalSeconds}/10]})) {
@@ -1988,13 +1990,13 @@ Sub buffCheckRoutine(string checkTypes, bool combatBuff, string onCallRoutine)
 				/call buffCheckStacking buff ${nArray} Me.Buff
 				/if (${Macro.Return.Equal[TRUE]}) {
 					/if (${buffText[${nArray}].NotEqual[NULL]}) {
-						/if (${Me.Aura[1].Equal[${buffText[${nArray}]}]} || ${Me.Aura[1].Equal[${buffName[${nArray}]}]} || ${Me.Aura[2].Equal[${buffText[${nArray}]}]} || ${Me.Aura[2].Equal[${buffName[${nArray}]}]}) {
+						/if (${Me.Aura[1].Name.Equal[${buffText[${nArray}]}]} || ${Me.Aura[1].Name.Equal[${buffName[${nArray}]}]} || ${Me.Aura[2].Name.Equal[${buffText[${nArray}]}]} || ${Me.Aura[2].Name.Equal[${buffName[${nArray}]}]}) {
 							| Work around for MQ2 aura bug
 						} else {
 							/if ((!${Me.Buff[${buffText[${nArray}]}].ID} || ${Me.Buff[${buffText[${nArray}]}].Duration} <= ${Math.Calc[${Spell[${buffName[${nArray}]}].Duration.TotalSeconds}/10]}) && !${Me.Song[${buffText[${nArray}]}].ID}) /call CastBuff ${Me.ID} ${nArray} SELF
 						}
 					} else {
-						/if (${Me.Aura[1].Equal[${buffName[${nArray}]}]} || ${Me.Aura[2].Equal[${buffName[${nArray}]}]}) {
+						/if (${Me.Aura[1].Name.Equal[${buffName[${nArray}]}]} || ${Me.Aura[2].Name.Equal[${buffName[${nArray}]}]}) {
 							| Work around for MQ2 aura bug
 						} else {
 							/if ((!${Me.Buff[${buffName[${nArray}]}].ID} ||  ${Me.Buff[${buffName[${nArray}]}].Duration} <= ${Math.Calc[${Spell[${buffName[${nArray}]}].Duration.TotalSeconds}/10]})) /call CastBuff ${Me.ID} ${nArray} SELF
@@ -2080,7 +2082,7 @@ Sub buffCheckStacking(string buffType, int buffID, string buffTargetVar, string 
 	/declare thisSpellName	string local
 	/declare currBaseSpell	string local NULL
 	
-	/if (!${Defined[buffSubType]}) /declare buffSubType string local 
+	/if (${buffSubType.Equal[NULL]}) /varset buffSubType 
 	/if (${buffType.Find[group]}) /varset textVar Display
 	/if (${buffType.Equal[buff]}) /varset nameVar Name
 	
@@ -2180,7 +2182,7 @@ Sub campCheck(bool pauseCheck)
 	/declare pcID			int local
 	/declare pcNum		int local 0
 	/declare campSafe	bool local
-	/if (!${Defined[pauseCheck]}) /declare pauseCheck bool local FALSE
+	/if (${pauseCheck}) /varset pauseCheck FALSE
 	/if (!${Defined[unsafePCLastCheckCombat]}) /declare unsafePCLastCheckCombat bool outer ${inCombat}
 	
 	/if (${Spawn[GM].ID}) {
@@ -2267,7 +2269,7 @@ Sub CastSpell(string spellType, bool combatMem, bool faceTarg, bool AllowDiscs)
 	}
 	/if (!${castWhileInvis} && ${Me.Invis}) /return ABORT_INVIS
 	/if (${priorityCombatSpellsTimer}) /return ABORT_TIMER
-	/if (!${Defined[faceTarg]}) /declare faceTarg				bool local ${faceWhenCasting}
+	/if (${faceTarg} == NULL) /varset faceTarg ${faceWhenCasting}
 	/if (!${doCombatSpells}) /return ABORT_DISABLED
 	/if (${Me.Moving}) /return ABORT_MOVING
 	/declare cCondition		bool local
@@ -2281,9 +2283,9 @@ Sub CastSpell(string spellType, bool combatMem, bool faceTarg, bool AllowDiscs)
 	/declare restartTwist	bool local FALSE
 	/declare iLoop				int local 0
 	
-	/if (!${Defined[AllowDiscs]}) /declare AllowDiscs bool local TRUE
-	/if (!${Defined[spellType]} || ${spellType.Equal[NULL]}) {
-		/if (!${Defined[spellType]}) /declare spellType string local
+	/if (${AllowDiscs} == NULL) /varset AllowDiscs TRUE
+	/if (${spellType.Equal[NULL]}) {
+		/varset spellType 
 		/if (${spellTypeValue}) {
 			/varset sTypeNum 1
 			/varset spellType ${spellTypes[${sTypeNum}]}
@@ -2291,7 +2293,7 @@ Sub CastSpell(string spellType, bool combatMem, bool faceTarg, bool AllowDiscs)
 			/varset spellType ALL
 		}
 	}
-	/if (!${Defined[combatMem]}) /declare combatMem bool local TRUE
+	/if (${combatMem} == NULL) /varset combatMem TRUE
 	/if (!${csCount}) /return ABORT_NOSPELLS
 	/if (${globalCooldown}) /return ABORT_COOLDOWN
 	/if (${giftSpell}) {
@@ -2595,7 +2597,7 @@ Sub CastSpell(string spellType, bool combatMem, bool faceTarg, bool AllowDiscs)
 /return ${retValue}
 
 Sub CheckFriendList(int friendID)
-	/if (!${Defined[friendID]}) /return FALSE
+	/if (${friendID} == NULL) /return FALSE
 	/call CreateFriendList
 	/if (${friendList.Find[|${friendID}|]}) /return TRUE
 /return FALSE
@@ -2611,10 +2613,10 @@ Sub IsDetectedAdd(int checkID)
 /return FALSE
 
 Sub CheckForXTargetAdds(int cDist, int checkID, bool checkAll, bool silentRun)
-	/if (!${Defined[cDist]}) /declare cDist int local ${campRadius}
-	/if (!${Defined[checkAll]}) /declare checkAll bool local TRUE
-	/if (!${Defined[silentRun]}) /declare silentRun bool local FALSE
-	/if (!${Defined[checkID]}) /declare checkID int local 0
+	/if (${cDist} == NULL) /varset cDist ${campRadius}
+	/if (${checkAll} == NULL) /varset checkAll TRUE
+	/if (${silentRun} == NULL) /varset silentRun FALSE
+	/if (${checkID} == NULL) /varset checkID 0
 	
 	/declare xTargLoop			int local 0
 	/declare freeXTarget		int local 0
@@ -2622,6 +2624,7 @@ Sub CheckForXTargetAdds(int cDist, int checkID, bool checkAll, bool silentRun)
 	/declare checkY					float local ${If[!${checkID},${homeY},${Spawn[${checkID}].Y}]}
 	/declare checkX					float local ${If[!${checkID},${homeX},${Spawn[${checkID}].X}]}
 	
+	HIGHERDEBUG "Checking XTarget for adds" TRUE 5
 	/for xTargLoop 1 to ${maxXTargets}
 		/if (${Me.XTarget[${xTargLoop}].${xTargType}.Equal[Auto Hater]} && !${Me.XTarget[${xTargLoop}].ID}) /varcalc freeXTarget ${freeXTarget} + 1
 		/if (${Me.XTarget[${xTargLoop}].ID}) {
@@ -2644,13 +2647,13 @@ Sub CheckForXTargetAdds(int cDist, int checkID, bool checkAll, bool silentRun)
 	/next xTargLoop
 /return ${freeXTarget}
 
-Sub CheckForAdds(int cDist, int checkID,  bool useChoose, bool checkAll, bool silentRun)
+Sub CheckForAdds(int cDist, int checkID, bool useChoose, bool checkAll, bool silentRun)
 	/if (${priorityAddCheckTimer}) /return ABORT_TIMER
-	/if (!${Defined[cDist]}) /declare cDist int local ${campRadius}
-	/if (!${Defined[checkID]}) /declare checkID int local 0
-	/if (!${Defined[useChoose]}) /declare useChoose bool local FALSE
-	/if (!${Defined[checkAll]}) /declare checkAll bool local TRUE
-	/if (!${Defined[silentRun]}) /declare silentRun bool local FALSE
+	/if (${cDist} == NULL) /varset cDist ${campRadius}
+	/if (${checkID} == NULL) /varset checkID 0
+	/if (${useChoose} == NULL) /varset useChoose FALSE
+	/if (${checkAll} == NULL) /varset checkAll TRUE
+	/if (${silentRun} == NULL) /varset silentRun FALSE
 
 	/if (${checkID} && !${Spawn[${checkID}].ID}) /varset checkID 0
 	/if (!${checkID} && (${followMode} || (${Defined[soloMode]} && ${soloMode}))) /varset checkID ${Me.ID}
@@ -2748,6 +2751,7 @@ Sub CheckForAdds(int cDist, int checkID,  bool useChoose, bool checkAll, bool si
 			}		
 	}
 	:endDetection
+	HIGHERDEBUG "CheckForAdds completed.  newAddID: ${newAddID" TRUE 5
 	/if (${useChoose}) {
 		/call ChooseTarget ${newAddID}
 	} else {
@@ -2767,7 +2771,7 @@ Sub CheckForAggro(int mobCheck)
 	/declare mobHeading 		float local
 	/declare mobToMeHeading float local
 	/declare mToTID					int local 0
-	/if (!${Defined[mobCheck]}) /declare mobCheck				int local 0
+	/if (${mobCheck} == NULL) /varset mobCheck 0
 
 	/if (!${checkForAdds}) /varset mobCheck ${targID}
 	
@@ -3389,6 +3393,7 @@ Sub CommonINILoad
 	/declare priorityAddCheck					string outer 5s
 	/declare priorityAssist						string outer 3s
 	/declare priorityUnsafePC					string outer 30s**|
+	/declare priorityDebuffs					string outer 20s
 	/declare priorityDebuffsTimer				timer outer 0s
 	/declare priorityAutoBuffsTimer			timer outer 0s
 	/declare prioritySelfBuffsTimer			timer outer 0s
@@ -3577,8 +3582,8 @@ Sub ChooseTarget(int forceTarg, int baseAround)
 	/varset newAdd FALSE
 	/varset newTarg FALSE
 
-	/if (!${Defined[forceTarg]}) /declare forceTarg int local 0
-	/if (!${Defined[baseAround]}) /declare baseAround int local ${Me.ID}
+	/if (${forceTarg} == NULL) /varset forceTarg 0
+	/if (${baseAround} == NULL) /varset baseAround ${Me.ID}
 	
 	/if ((!${forceTarg} || !${useForceTarg}) && (!${groupMode} || !${Spawn[${mainAssist}].ID} || ${Spawn[${mainAssist}].Type.Equal[Corpse]} || (${Spawn[${mainAssist}].Linkdead} && ${Spawn[${mainAssist}].Type.NotEqual[mercenary]}) || ${mainAssist.Equal[${Me.CleanName}]} || ${mainAssist.Equal[NULL]})) {
 		/for tLoop 1 to ${targCount}
@@ -3652,8 +3657,8 @@ Sub ChooseTarget(int forceTarg, int baseAround)
 /return
 
 Sub ClearCursor(string clearType,string maxAttemptTime)
-	/if (!${Defined[clearType]}) /declare clearType string local AUTOINVENTORY
-	/if (!${Defined[maxAttemptTime]}) /declare maxAttemptTime string local 15s
+	/if (${clearType.Equal[NULL]}) /varset clearType AUTOINVENTORY
+	/if (${maxAttemptTime.Equal[NULL]}) /varset maxAttemptTime 15s
 	/if (!${Select[${clearType},AUTOINV,AUTO,AUTOINVENTORY,DESTROY,DEST]}) /varset clearType AUTOINVENTORY
 	/declare clearCursorTimer		timer local ${maxAttemptTime}
 
@@ -3710,7 +3715,7 @@ Sub CreateFriendList
 /return
 
 Sub CreateIgnoreAlert(int aListNum)
-	/if (!${Defined[aListNum]}) /declare aListNum int local ${alertList}
+	/if (${aListNum} == NULL) /varset aListNum ${alertList}
 	/varset alertList ${aListNum}
 	
 	/squelch /alert clear ${aListNum}
@@ -3729,7 +3734,7 @@ Sub CreateIgnoreAlert(int aListNum)
 /return
 
 Sub CreateSafeAlert(int aListNum)
-	/if (!${Defined[aListNum]}) /declare aListNum int local ${safeAlertList}
+	/if (${aListNum} == NULL) /varset aListNum ${safeAlertList}
 	/varset safeAlertList ${aListNum}
 	
 	/squelch /alert clear ${aListNum}
@@ -3880,7 +3885,7 @@ Sub DebuffRoutine(int mobID)
 	/if (${priorityDebuffsTimer}) /return ABORT_TIMER
 	/if (${debuffCheckTimer}) /return ABORT_TIMER
 	/if (${Me.Moving}) /return ABORT_MOVING
-	/if (!${Defined[mobID]}) /declare mobID		int local 0
+	/if (${mobID} == NULL) /varset mobID 0
 	/declare currID				int local
 	/declare dArray				int local
 	
@@ -3925,9 +3930,9 @@ Sub DoNotAttackCheck
 Sub EchoLog(string eMsg, bool logOnly, int msgLevel)
 	/declare sMsg			string local
 
-	/if (!${Defined[eMsg]})	/return
-	/if (!${Defined[logOnly]}) /declare logOnly	bool local FALSE
-	/if (!${Defined[msgLevel]}) /declare msgLevel int local 0
+	/if (${eMsg.Equal[NULL]})	/return
+	/if (${logOnly} == NULL) /varset logOnly FALSE
+	/if (${msgLevel} == NULL) /varset msgLevel 0
 
 	/if (${msgLevel} <= ${debugLvl}) {
 		/call StripText "${eMsg}"
@@ -3941,9 +3946,9 @@ Sub EchoLog(string eMsg, bool logOnly, int msgLevel)
 /return
 
 Sub Evac(bool campOut, bool campOutOnly, bool silentEvac)
-	/if (!${Defined[campOut]}) /declare campOut bool local TRUE
-	/if (!${Defined[campOutOnly]}) /declare campOutOnly bool local FALSE
-	/if (!${Defined[silentEvac]}) /declare silentEvac bool local FALSE
+	/if (${campOut} == NULL) /varset campOut TRUE
+	/if (${campOutOnly} == NULL) /varset campOutOnly FALSE
+	/if (${silentEvac} == NULL) /varset silentEvac FALSE
 	
 	/if (!${campOutOnly}) {
 		/call EchoLog "Attempting to gate out"
@@ -3973,19 +3978,18 @@ Sub Evac(bool campOut, bool campOutOnly, bool silentEvac)
 /return
 
 Sub GetINISetting(string ININame,string INISection,string INIKey,string VariableName,string defaultValue,string createSettingStr,string variableType)
-	/if (!${Defined[ININame]}) /return INVALIDINI
-	/if (!${Defined[INISection]}) /return INVALIDSECTION
-	/if (!${Defined[INIKey]}) /return INVALIDKEY
-	/if (!${Defined[VariableName]}) /return INVALIDVARIABLE	
-	/if (${Defined[createSettingStr]} && ${createSettingStr.NotEqual[TRUE]} && ${createSettingStr.NotEqual[FALSE]} && !${Defined[variableType]}) {
-		/declare variableType		string local ${createSettingStr}
+	/if (${ININame.Equal[NULL]}) /return INVALIDINI
+	/if (${INISection.Equal[NULL]}) /return INVALIDSECTION
+	/if (${INIKey.Equal[NULL]}) /return INVALIDKEY
+	/if (${VariableName.Equal[NULL]}) /return INVALIDVARIABLE	
+	/if (${createSettingStr.NotEqual[NULL]} && ${createSettingStr.NotEqual[TRUE]} && ${createSettingStr.NotEqual[FALSE]} && ${variableType.Equal[NULL]}) {
+		| /declare variableType		string local ${createSettingStr}
+		/varset variableType ${createSettingStr}
 		/declare createSetting	bool local TRUE
-	} else /if (${Defined[createSettingStr]}) {
+	} else /if (${createSettingStr.NotEqual[NULL]}) {
 		/declare createSetting	bool local ${createSettingStr}
 	}
 	/if (!${Defined[createSetting]}) /declare createSetting 	bool local TRUE
-	/if (!${Defined[defaultValue]}) /declare defaultValue 		string local NULL
-	/if (!${Defined[variableType]}) /declare variableType			string local NULL
 	/declare iniValue						string local NULL
 	
 	/varset iniValue ${Ini[${ININame},${INISection},${INIKey},DOES_NOT_EXIST]}
@@ -3993,19 +3997,26 @@ Sub GetINISetting(string ININame,string INISection,string INIKey,string Variable
 		/if (${createSetting}) /ini "${ININame}" "${INISection}" "${INIKey}" "${defaultValue}"
 		/varset iniValue ${defaultValue}
 	}
-	/if (!${Defined[${VariableName}]} && ${variableType.NotEqual[NULL]}) /declare ${VariableName} ${variableType} outer
-	/if (${VariableName.NotEqual[NULL]}) /varset ${VariableName} ${iniValue}
+
+	/declare variableDefName string local ${VariableName}
+	| /declare variableIndex int local 0
+	/if (${VariableName.Find[[]}) {
+		/varset variableDefName ${VariableName.Left[${Math.Calc[${VariableName.Find[[]} - 1]}]}
+		| /varset variableIndex ${VariableName.Mid[${Math.Calc[${VariableName.Find[[]} + 1]},${Math.Calc[${VariableName.Find[]]} - ${VariableName.Find[[]} + 1]}]}
+	}
+	/if (!${Defined[${variableDefName}]} && !${VariableName.Find[[]} && ${variableType.NotEqual[NULL]}) /declare ${VariableName} ${variableType} outer
+	/if (${Defined[${variableDefName}]} && ${VariableName.NotEqual[NULL]}) /varset ${VariableName} ${iniValue}
 /return COMPLETED
 
 | Needs to be worked on if you want to use!!  Is ok for simple applications
 Sub GetINIArray(string ININame,string INISection,string INIKeyPrefix,string ArrayName,string ArrayType,string defaultValue,int createNum)
-	/if (!${Defined[ININame]}) /return INVALIDINI
-	/if (!${Defined[INISection]}) /return INVALIDSECTION
-	/if (!${Defined[INIKeyPrefix]}) /return INVALIDKEYPREFIX
-  /if (!${Defined[ArrayName]}) /return INVALIDARRAY
-  /if (!${Defined[ArrayType]}) /declare ArrayType						string local string
-	/if (!${Defined[createNum]}) /declare createNum 					int local 1
-	/if (!${Defined[defaultValue]}) /declare defaultValue 		string local NULL
+	/if (${ININame.Equal[NULL]}) /return INVALIDINI
+	/if (${INISection.Equal[NULL]}) /return INVALIDSECTION
+	/if (${INIKeyPrefix.Equal[NULL]}) /return INVALIDKEYPREFIX
+  /if (${ArrayName.Equal[NULL]}) /return INVALIDARRAY
+  /if (${ArrayType.Equal[NULL]}) /varset ArrayType string
+	/if (${createNum} == NULL) /varset createNum 1
+	/if (${defaultValue.Equal[NULL]}) /varset defaultValue NULL
 	/declare iniValue						string local NULL
 	/declare iniArrayCount			int local 0
 	/declare arraySize					int local 0
@@ -4033,10 +4044,9 @@ Sub GetINIArray(string ININame,string INISection,string INIKeyPrefix,string Arra
 /return COMPLETED
 
 Sub GetINIArrayCount(string ININame,string INISection,string INIKeyPrefix,string invalidValue)
-	/if (!${Defined[ININame]}) /return 0
-	/if (!${Defined[INISection]}) /return 0
-	/if (!${Defined[INIKeyPrefix]}) /return 0
-	/if (!${Defined[invalidValue]}) /declare invalidValue				string local NULL
+	/if (${ININame.Equal[NULL]}) /return 0
+	/if (${INISection.Equal[NULL]}) /return 0
+	/if (${INIKeyPrefix.Equal[NULL]}) /return 0
 	/declare iniCount					int local 0
 	/declare nullCount				int local 0
 	
@@ -4143,7 +4153,7 @@ Sub GetMTTarget()
 /return ${mtTargetID}
 
 Sub CommonGetTarget(bool targNew)
-	/if (!${Defined[targNew]}) /declare targNew bool local TRUE
+	/if (${targNew} == NULL) /varset targNew TRUE
 	/declare newTargID						int local 0
 	/declare targLoop							int local 0
 
@@ -4181,8 +4191,8 @@ Sub CommonGetTarget(bool targNew)
 /return ${newTargID}
 
 Sub GlobalCommands(string comFrom, string comText, bool fromEQBC)
-	/if (!${Defined[comFrom]} || !${Defined[comText]}) /return ABORT_PARAMS
-	/if (!${Defined[fromEQBC]}) /declare fromEQBC				bool local FALSE
+	/if (${comFrom.Equal[NULL]} || ${comText.Equal[NULL]}) /return ABORT_PARAMS
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare retValue									string local COMPLETED_NOTFOUND
 	/declare paramCount								int local
 	/varcalc paramCount ${comText.Count[ ]} + 1
@@ -4857,7 +4867,7 @@ Sub GlobalCommands(string comFrom, string comText, bool fromEQBC)
 Sub ItemSwapCheck(string itemName)
 	/declare needToSwap		bool local FALSE
 	/declare slotsReq		int local
-	/if (!${Defined[itemName]} && !${itemSwapped}) {
+	/if (${itemName.Equal[NULL]} && !${itemSwapped}) {
 		/call EchoLog "No item specified to check for, aborting swap check." TRUE
 		/return
 	}
@@ -4925,7 +4935,7 @@ Sub pauseActions
 Sub SafePC(string pcName)
 	/declare isSafe 	bool local FALSE
 	/declare inum			int local
-	/if (!${Defined[pcName]}) {
+	/if (${pcName.Equal[NULL]}) {
 		/call EchoLog "Pc name not specified for safe pc check, aborting and returning as unsafe" TRUE
 		/return FALSE
 	}
@@ -4972,7 +4982,7 @@ Sub StripText(string cString)
 	/declare wString		string local
 	/declare argString	string local
 	
-	/if (!${Defined[cString]}) /return
+	/if (${cString.Equal[NULL]}) /return
 	/if (!${cString.Find[\]}) /return ${cString}
 	/varset wString ${cString}
 	
@@ -4987,9 +4997,8 @@ Sub StripText(string cString)
 /return ${cString}
 
 Sub SummonItem(string spellName, string spellSlot, string targetName, string itemName, bool putInInv, bool unfold)
-	/if (!${Defined[itemName]}) /declare itemName string local NULL
-	/if (!${Defined[putInInv]}) /declare putInInv bool local TRUE
-	/if (!${Defined[unfold]}) /declare unfold bool local TRUE
+	/if (${putInInv} == NULL) /varset putInInv TRUE
+	/if (${unfold} == NULL) /varset unfold TRUE
 	/declare pLoop		int local
 	/declare pFound		bool local FALSE
 	/declare emptyPrimary		int local 0
@@ -5170,14 +5179,14 @@ Sub SummonedItemsCheck
 /return
 
 Sub Timer(string timerPrefix, int timerID, string setTo, bool delTimer)
-	/if (${Defined[delTimer]} && ${delTimer}) {
+	/if (${delTimer}) {
 		/if (${timerID} >= 0) {
 			/if (!${Defined[${timerPrefix}Timer${timerID}]}) /deletevar ${timerPrefix}Timer${timerID}
 		} else {
 			/if (!${Defined[${timerPrefix}Timer]}) /deletevar ${timerPrefix}Timer
 		}
 	} else {
-		/if (${Defined[setTo]}) {
+		/if (${setTo.NotEqual[NULL]}) {
 			/if (${timerID} >= 0) {
 				/if (!${Defined[${timerPrefix}Timer${timerID}]}) /declare ${timerPrefix}Timer${timerID} timer outer 0s
 				/varset ${timerPrefix}Timer${timerID} ${setTo}
@@ -5186,9 +5195,9 @@ Sub Timer(string timerPrefix, int timerID, string setTo, bool delTimer)
 				/varset ${timerPrefix}Timer ${setTo}			
 			}
 		} else {
-			/if (${Defined[timerID]} && ${timerID} >= 0 && (!${Defined[${timerPrefix}Timer${timerID}]} || !${${timerPrefix}Timer${timerID}})) {
+			/if (${timerID} != NULL && ${timerID} >= 0 && (!${Defined[${timerPrefix}Timer${timerID}]} || !${${timerPrefix}Timer${timerID}})) {
 				/return FALSE
-			} else /if ((!${Defined[timerID]} || ${timerID} < 0) && (!${Defined[${timerPrefix}Timer]} || !${${timerPrefix}Timer})) {
+			} else /if ((${timerID} == NULL || ${timerID} < 0) && (!${Defined[${timerPrefix}Timer]} || !${${timerPrefix}Timer})) {
 				/return FALSE
 			} else {
 				/return TRUE
@@ -5223,7 +5232,7 @@ Sub TrackKillCount(string killName,bool allMatches)
 	/declare tkLoop			int local 0
 	/declare knFound		bool local FALSE
 	/declare tkCount		int local 0
-	/if (!${Defined[allMatches]}) /declare allMatches bool FALSE
+	/if (${allMatches} == NULL) /varset allMatches FALSE
 	
 	/for tkLoop 1 to 200
 		/if ((!${allMatches} && ${killTrack[${tkLoop},1].Equal[${killName}]}) || (${allMatches} && ${killTrack[${tkLoop},1].Find[${killName}]})) {
@@ -5236,7 +5245,7 @@ Sub TrackKillCount(string killName,bool allMatches)
 Sub TrackKillReset(string killName,bool allMatches)
 	/declare tkLoop			int local 0
 	/declare knFound		bool local FALSE
-	/if (!${Defined[allMatches]}) /declare allMatches bool FALSE
+	/if (${allMatches} == NULL) /varset allMatches FALSE
 	
 	/for tkLoop 1 to 200
 		/if ((!${allMatches} && ${killTrack[${tkLoop},1].Equal[${killName}]}) || (${allMatches} && ${killTrack[${tkLoop},1].Find[${killName}]})) {
@@ -5336,7 +5345,7 @@ Sub WaitForRez(string maxWaitTime)
 		/varset deathZ ${homeZ}
 	}
 	/declare waitTimer			bool local FALSE
-	/if (${Defined[maxWaitTime]} && !${Select[${maxWaitTime},0,0s,0m,00,0h]}) {
+	/if (${maxWaitTime.NotEqual[NULL]} && !${Select[${maxWaitTime},0,0s,0m,00,0h]}) {
 		/declare maxWaitTimer timer local ${maxWaitTime}
 		/varset waitTimer TRUE
 	}
@@ -5507,7 +5516,7 @@ Sub Event_rTell(rLine,string rFrom,string rMsg, string rType)
 	/declare hMsg		string local
 	/declare rFromID	int local 0
 	/declare rFromEQBC	bool local FALSE
-	/if (!${Defined[rType]}) /declare rType				string local TELL
+	/if (${rType.Equal[NULL]}) /varset rType TELL
 	
 	/if (${rFrom.Equal[${Me.Pet.CleanName}]}) /return
 	/if (${rType.Equal[TELL]} && !${tellCommands}) /return
@@ -5653,8 +5662,8 @@ Sub Event_mercStanceChange(line,string newStance)
 /return
 
 Sub MissionCommandHandler(string comFrom, string comText, bool fromEQBC)
-	/if (!${Defined[comFrom]} || !${Defined[comText]}) /return ABORT_PARAMS
-	/if (!${Defined[fromEQBC]}) /declare fromEQBC				bool local FALSE
+	/if (${comFrom.Equal[NULL]} || ${comText.Equal[NULL]}) /return ABORT_PARAMS
+	/if (${fromEQBC} == NULL) /varset fromEQBC FALSE
 	/declare retValue									string local COMPLETED_NOTFOUND
 	/declare paramCount								int local
 	/varcalc paramCount ${comText.Count[ ]} + 1
@@ -5720,7 +5729,7 @@ Sub MissionCommandSend(string sendTo,string sendText,bool missionCommTagged)
 		/varset commandMethod /tell
 		/varset postSendDelay 5
 	}
-	/if (!${Defined[missionCommTagged]}) /declare missionCommTagged bool local TRUE
+	/if (${missionCommTagged} == NULL) /varset missionCommTagged TRUE
 	/if (${sendTo.Equal[LEADER]} && ${missionLeader.Equal[GROUP]}) {
 		/varset sendTo ${Group.Leader.Name}
 	} else /if (${sendTo.Equal[LEADER]}) {
@@ -5759,7 +5768,7 @@ Sub MissionFollowerStatus(string followerName,string statusString,bool setStatus
 	/declare mfLoop			int local 1
 	/declare mfWhile		bool local TRUE
 	/declare mfRetValue	string local TRUE
-	/if (!${Defined[setStatus]}) /declare setStatus bool local FALSE
+	/if (${setStatus} == NULL) /varset setStatus FALSE
 	
 	/if (!${setStatus}) {
 		/if (${followerName.Equal[ANY]}) /varset mfRetValue FALSE
@@ -5903,7 +5912,7 @@ Sub MissionLoadAction(int actionNumber,bool buildINI)
 	/declare actionMainTank	string local NULL
 	/declare actionPuller		string local NULL
 	/declare actionMainAssist string local NULL
-	/if (!${Defined[buildINI]}) /declare buildINI bool local FALSE
+	/if (${buildINI} == NULL) /varset buildINI FALSE
 	
 	/call EchoLog "Attempting to load mission action ${actionNumber} from INI ${missionINI}" TRUE
 	
@@ -6066,7 +6075,7 @@ Sub MissionLoadAction(int actionNumber,bool buildINI)
 /return TRUE
 
 Sub MissionModeEnd(string endReason)
-	/if (${Defined[endReason]}) /call EchoLog "${endReason}"
+	/if (${endReason.NotEqual[NULL]}) /call EchoLog "${endReason}"
 	/if (${missionAmLeader}) /call MissionCommandSend ALL "MissionMode OFF" FALSE
 	/varset missionMode FALSE
 	/varset missionStatus NULL	
