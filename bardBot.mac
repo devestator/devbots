@@ -160,7 +160,7 @@
 #event MezBroke "#1#has been awakened by#2#"
 
 Sub main(string iniNameStr)
-	/declare meVersion									float outer 1.28
+	/declare meVersion									float outer 1.29
 	/declare myName											string outer bardbot
 	/declare myClass										string outer BRD
 	
@@ -424,7 +424,7 @@ Sub CastSong(string songName, int songGem, int maxTries, bool endSong, string on
 			/delay 1s !${Me.Casting.ID}
 			/goto :castAttempt
 		}
-		/if (${Defined[onCallRoutine]}) /call ${onCallRoutine}
+		/if (${onCallRoutine.NotEqual[NULL]}) /call ${onCallRoutine}
 	/if (${castTimer} && ${Me.Casting.ID} && ${castTimeout}) /goto :castingLoop
 	/if (${endSong}) /melody
 	/if (!${castTimeout}) /varset CastResult CAST_TIMEOUT
