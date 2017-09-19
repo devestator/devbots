@@ -701,7 +701,7 @@ Sub LoadSettings
 | Load Heals
 | ====================	
 	/declare healCount											int outer
-	/call GetINIArrayCount ${iniName} Heals HealName
+	/call GetINIArrayCount ${iniName} Heals HealName NULL
 	/varset healCount ${Macro.Return}
 	/call EchoLog "Loading heals:  ${healCount} heal spell(s)" TRUE
 
